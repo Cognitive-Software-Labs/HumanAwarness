@@ -68,3 +68,20 @@ ros2 run human_perception bbox_keypoints_node --ros-args \
 ```
 
 (Default params live in `src/human_perception/config/bbox_keypoints.yaml`.)
+
+## Testing on a static image (no ROS2 needed)
+
+To quickly check detection quality on your own photo(s) — no camera, no
+`ros2 launch`, just the model:
+
+```bash
+source .venv/bin/activate
+python3 scripts/test_bbox_keypoints_on_image.py path/to/photo.jpg
+# or a whole folder of images:
+python3 scripts/test_bbox_keypoints_on_image.py path/to/folder/
+```
+
+Saves an annotated copy of each image to `test_output/` (bbox, keypoint
+skeleton, confidence, and a per-image `id N` label per detected person),
+and prints a per-image detection count to the terminal. `test_output/` is
+gitignored — it's generated output, not something to commit.

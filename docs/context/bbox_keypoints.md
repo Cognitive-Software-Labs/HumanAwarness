@@ -87,6 +87,11 @@ environment cleanly. Two issues hit during setup, both resolved — see
   confirmed correct `PersonDetectionArray` output on
   `human_perception/detections` via `ros2 topic echo` — 2 people, 17
   keypoints each, correct bbox/confidence values.
+- `scripts/test_bbox_keypoints_on_image.py` (no ROS2 needed, exercises the
+  same model directly): run against Ultralytics' own `bus.jpg` (3 people)
+  and `zidane.jpg` (2 people) sample images — correct person counts in
+  both, bboxes + keypoint skeletons + per-image `id N` labels all rendered
+  correctly in `test_output/`.
 
 ## Known gaps / not done yet
 
