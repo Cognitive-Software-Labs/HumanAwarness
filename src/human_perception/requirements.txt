@@ -1,2 +1,11 @@
+# Install into a venv created with `--system-site-packages` so it can see
+# the apt-installed rclpy/cv_bridge/python3-opencv from your ROS2 install.
+#
+# numpy<2 is required: ROS2's cv_bridge and python3-opencv (apt) are
+# compiled against the NumPy 1.x ABI; letting pip pull in NumPy 2.x (which
+# ultralytics/torch would otherwise do) breaks cv_bridge's native extension.
+# Do NOT pip-install opencv-python either — it forces numpy>=2 and shadows
+# the working apt python3-opencv. Use the system one via
+# --system-site-packages instead.
 ultralytics>=8.3
-opencv-python
+numpy<2

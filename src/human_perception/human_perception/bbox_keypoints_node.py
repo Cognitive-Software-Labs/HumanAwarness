@@ -37,7 +37,7 @@ class BboxKeypointsNode(Node):
 
         self.declare_parameter("image_topic", "/camera/image_raw")
         self.declare_parameter("detections_topic", "human_perception/detections")
-        self.declare_parameter("model_path", "yolo26-pose.pt")
+        self.declare_parameter("model_path", "yolo26n-pose.pt")
         self.declare_parameter("device", "cpu")
         self.declare_parameter("confidence_threshold", 0.5)
         self.declare_parameter("publish_annotated", False)

@@ -13,17 +13,33 @@ See `CLAUDE.md` for a running index of what's been built, and
 
 ## Setup
 
-```bash
-# Python deps for human_perception (not available via rosdep)
-pip install -r src/human_perception/requirements.txt
+`human_perception` needs `ultralytics`/`torch`, which don't mix cleanly
+with ROS2's apt-installed, NumPy-1.x-compiled `cv_bridge`/`python3-opencv`.
+Use a venv built with `--system-site-packages` so it can still see those,
+and build with `python3 -m colcon build` (not plain `colcon build`) so the
+venv's interpreter — not the system one — ends up in the generated node
+script. See `docs/context/bbox_keypoints.md` for why.
 
-# ROS2 deps
+```bash
+source /opt/ros/<distro>/setup.bash   # e.g. jazzy
+
+# ROS2 deps for the custom message package
 rosdep install --from-paths src --ignore-src -r -y
 
-# Build
-colcon build
+# venv for the Python deps human_perception needs (ultralytics etc.)
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+pip install -r src/human_perception/requirements.txt
+
+# Build — must run via the venv's python so colcon bakes in the right
+# interpreter (a bare `colcon build` always uses system Python here)
+python3 -m colcon build --symlink-install
 source install/setup.bash
 ```
+
+Each new shell needs both `source /opt/ros/<distro>/setup.bash` and
+`source .venv/bin/activate` (in that order) before `source
+install/setup.bash`.
 
 ## Launch
 

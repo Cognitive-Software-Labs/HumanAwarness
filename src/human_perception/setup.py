@@ -23,7 +23,6 @@ setup(
         "YOLO26-pose."
     ),
     license="Apache-2.0",
-    tests_require=["pytest"],
     entry_points={
         "console_scripts": [
             "bbox_keypoints_node = human_perception.bbox_keypoints_node:main",
