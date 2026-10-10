@@ -95,5 +95,15 @@ environment cleanly. Two issues hit during setup, both resolved — see
 - Not tested against a live camera driver / real camera topic, only a
   single published test frame — confirm with an actual camera node before
   trusting this in the field.
+  - Attempted this on the dev machine and hit an unrelated local
+    permissions issue: `/dev/video0` is owned by `root:video`, and the
+    dev session's user wasn't in the `video` group or the device's ACL
+    (which named a different user). No `sudo` available to fix it in that
+    session. Not a code issue — just re-check camera device permissions
+    for whatever user actually runs this node.
+  - `ros-jazzy-v4l2-camera` (apt) is the straightforward real camera
+    driver to pair with `image_topic:=/image_raw` once permissions are
+    sorted; alternatively a plain `cv2.VideoCapture` + `cv_bridge` script
+    needs no extra apt package at all.
 - Model weights (`yolo26n-pose.pt`) are not vendored; Ultralytics will
   download them on first run if not already cached locally.
