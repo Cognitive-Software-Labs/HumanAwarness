@@ -85,3 +85,18 @@ Saves an annotated copy of each image to `test_output/` (bbox, keypoint
 skeleton, confidence, and a per-image `id N` label per detected person),
 and prints a per-image detection count to the terminal. `test_output/` is
 gitignored — it's generated output, not something to commit.
+
+## Testing on a video (no ROS2 needed)
+
+Same idea, but for a video file, with persistent per-person tracking IDs
+(via Ultralytics' built-in tracker) instead of per-frame numbering:
+
+```bash
+source .venv/bin/activate
+python3 scripts/test_bbox_keypoints_on_video.py path/to/video.mp4
+```
+
+Saves an annotated copy to `test_output/<name>_annotated.mp4` and prints
+the frame count + number of unique tracked people. Detection/tracking
+quality depends a lot on camera angle and how large people are in frame —
+see `docs/context/bbox_keypoints.md` for what was actually tested.

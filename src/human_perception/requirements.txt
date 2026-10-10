@@ -9,3 +9,8 @@
 # --system-site-packages instead.
 ultralytics>=8.3
 numpy<2
+
+# Needed for scripts/test_bbox_keypoints_on_video.py's use of
+# model.track() (Ultralytics' built-in tracker). Not used by
+# bbox_keypoints_node itself, which has no tracker enabled.
+lap>=0.5.12

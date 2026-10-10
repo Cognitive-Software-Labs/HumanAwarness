@@ -92,6 +92,30 @@ environment cleanly. Two issues hit during setup, both resolved — see
   and `zidane.jpg` (2 people) sample images — correct person counts in
   both, bboxes + keypoint skeletons + per-image `id N` labels all rendered
   correctly in `test_output/`.
+- `scripts/test_bbox_keypoints_on_video.py` (adds Ultralytics' built-in
+  tracker, `model.track(persist=True)`, for persistent per-person IDs
+  across frames — not used by `bbox_keypoints_node` itself):
+  - Tested on OpenCV's classic `vtest.avi` pedestrian sample (elevated
+    security-camera angle, 768x576, old/grainy). Raw detection confidence
+    stayed marginal throughout (~0.1-0.6, mostly below the 0.5 default
+    threshold), and the tracker essentially never confirmed an ID
+    (`boxes.id` was `None` on effectively every frame checked), even
+    though boxes/keypoints themselves were drawn when confidence cleared
+    the threshold. Switching to the `small` model size didn't
+    meaningfully fix it — the footage itself (small/distant/grainy
+    subjects, oblique angle) is the limiting factor, not model size.
+  - Tested on a normal eye-level HD clip instead (1280x720, 30fps, 5
+    people walking toward a camera at head/shoulder height) — all 5
+    people detected at 0.84-0.91 confidence throughout, and tracking IDs
+    stayed correctly assigned to the same 5 people for the full ~20s
+    clip. This is the much more representative case for an actual
+    deployment (a front-facing robot camera, not an elevated security
+    cam), and it performed well.
+  - **Takeaway**: detection/tracking quality depends heavily on camera
+    angle and subject size in frame, not just raw resolution. Validate
+    against footage from the actual robot's camera (expected: a 4K
+    front-facing camera, closer to the second test case) before trusting
+    default thresholds in the field.
 
 ## Known gaps / not done yet
 
