@@ -52,7 +52,11 @@ def main():
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     cap.release()
 
-    writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (width, height))
+    # avc1 (H.264) instead of mp4v: mp4v writes an MPEG-4 Part 2 stream that
+    # most modern players/browsers can't decode (no bundled codec for it),
+    # which is why earlier output files failed to open. H.264 is nearly
+    # universally supported.
+    writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"avc1"), fps, (width, height))
 
     # persist=True keeps the same tracker (and ID assignment) alive across
     # the stream=True generator's frames, instead of restarting per frame.

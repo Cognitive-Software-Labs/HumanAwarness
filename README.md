@@ -10,6 +10,10 @@ See `CLAUDE.md` for a running index of what's been built, and
 
 - **bbox + keypoints detection** — monocular RGB person detection (bbox +
   COCO-17 keypoints) via YOLO26-pose. See `docs/context/bbox_keypoints.md`.
+- **human tracking / ReID** — persistent identity across brief occlusion
+  or leaving/re-entering frame (Kalman motion + OSNet appearance
+  matching). Core logic + standalone test script only, not yet a ROS2
+  node. See `docs/context/human_tracking.md`.
 
 ## Setup
 
@@ -100,3 +104,39 @@ Saves an annotated copy to `test_output/<name>_annotated.mp4` and prints
 the frame count + number of unique tracked people. Detection/tracking
 quality depends a lot on camera angle and how large people are in frame —
 see `docs/context/bbox_keypoints.md` for what was actually tested.
+
+## Testing human tracking / ReID (no ROS2 needed)
+
+One extra dependency beyond `human_perception`'s (`gdown`, to download
+OSNet's weights on first use):
+
+```bash
+source .venv/bin/activate
+pip install -r src/human_tracking/requirements.txt
+python3 scripts/test_human_tracking_on_video.py path/to/video.mp4
+```
+
+Saves an annotated copy to `test_output/<name>_tracked.mp4` — only
+`ACTIVE` tracks are drawn (a lost track has no reliable position to show)
+— and prints the number of confirmed identities plus how many were
+recovered via simple motion re-match vs. via ReID. Useful flags:
+
+```bash
+# simulate a detection dropout (e.g. to force/demo a LOST_GALLERY -> ACTIVE
+# ReID recovery) without needing footage with a real occlusion of the
+# right duration - ignores real detections for COUNT frames from START:
+python3 scripts/test_human_tracking_on_video.py path/to/video.mp4 \
+  --blackout START:COUNT
+
+# tune the lifecycle/matching parameters (see docs/context/human_tracking.md
+# for what each one trades off, especially --reid-threshold)
+python3 scripts/test_human_tracking_on_video.py path/to/video.mp4 \
+  --reid-threshold 0.65 --kalman-timeout 2.5 --gallery-timeout 45
+```
+
+See `docs/context/human_tracking.md` for what was actually tested
+(including real phone-recorded footage) and the known tradeoffs — in
+particular, the default `--reid-threshold` was lowered from an initially
+more conservative value after real testing, and that change has not been
+re-validated against the crowded-scene false-positive case documented
+there.

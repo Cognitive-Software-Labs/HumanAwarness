@@ -1,0 +1,4 @@
+# Install into the same venv as human_perception (torch/numpy/opencv
+# already satisfied from there). This adds only what human_tracking
+# needs on top:
+gdown
