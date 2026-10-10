@@ -1,0 +1,30 @@
+# CLAUDE.md
+
+Context index for the HumanAwareness project. This file stays short — it only
+tracks *what exists* and *where to read about it*. Detailed context for each
+logical part lives in `docs/context/`.
+
+## Project
+
+A ROS2 system that estimates whether a human is aware of a robot's presence
+(human awareness detection), built incrementally as a multi-package ROS2
+workspace under `src/`.
+
+## Workflow (how this file is maintained)
+
+- Each new logical part (a package, node, algorithm, or pipeline stage) gets
+  its own context file at `docs/context/<part>.md` describing: what it does,
+  why it exists, key design decisions, inputs/outputs, and dependencies.
+- This file (`CLAUDE.md`) only gets a one-line entry per part, linking to its
+  context file — never the full details inline.
+- `README.md` gets updated alongside with a user-facing summary of what was
+  added and how to launch/run it.
+
+## Parts
+
+_No parts added yet._
+
+<!--
+Template for new entries:
+- **<part name>** — one-line description. See `docs/context/<part>.md`.
+-->
