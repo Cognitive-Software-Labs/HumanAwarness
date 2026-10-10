@@ -1,0 +1,9 @@
+bbox_keypoints_node:
+  ros__parameters:
+    image_topic: /camera/image_raw
+    detections_topic: human_perception/detections
+    model_path: yolo26-pose.pt
+    device: cpu
+    confidence_threshold: 0.5
+    publish_annotated: false
+    annotated_image_topic: human_perception/annotated_image

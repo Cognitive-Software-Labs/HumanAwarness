@@ -22,7 +22,9 @@ workspace under `src/`.
 
 ## Parts
 
-_No parts added yet._
+- **bbox + keypoints detection** — monocular RGB person detection via
+  YOLO26-pose (`human_perception` node, `human_awareness_msgs` interfaces).
+  See `docs/context/bbox_keypoints.md`.
 
 <!--
 Template for new entries:
