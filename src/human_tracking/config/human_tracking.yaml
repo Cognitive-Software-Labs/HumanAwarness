@@ -1,0 +1,17 @@
+human_tracking_node:
+  ros__parameters:
+    image_topic: /camera/image_raw
+    detections_topic: human_perception/detections
+    tracked_topic: human_tracking/tracked_detections
+    sync_slop_s: 0.05
+    reid_weights_path: ""
+    device: cpu
+    gallery_size: 8
+    iou_threshold: 0.3
+    reid_threshold: 0.65
+    reid_margin: 0.08
+    max_speed_bbox_heights_per_sec: 3.0
+    confirm_frames: 3
+    kalman_timeout_s: 2.5
+    gallery_timeout_s: 45.0
+    reconcile_window_s: 1.5

@@ -12,8 +12,8 @@ See `CLAUDE.md` for a running index of what's been built, and
   COCO-17 keypoints) via YOLO26-pose. See `docs/context/bbox_keypoints.md`.
 - **human tracking / ReID** — persistent identity across brief occlusion
   or leaving/re-entering frame (Kalman motion + OSNet appearance
-  matching). Core logic + standalone test script only, not yet a ROS2
-  node. See `docs/context/human_tracking.md`.
+  matching), wired into a ROS2 node (`human_tracking_node`). See
+  `docs/context/human_tracking.md`.
 
 ## Setup
 
@@ -30,10 +30,12 @@ source /opt/ros/<distro>/setup.bash   # e.g. jazzy
 # ROS2 deps for the custom message package
 rosdep install --from-paths src --ignore-src -r -y
 
-# venv for the Python deps human_perception needs (ultralytics etc.)
+# venv for the Python deps human_perception + human_tracking need
+# (ultralytics, gdown for OSNet weights, etc.)
 python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 pip install -r src/human_perception/requirements.txt
+pip install -r src/human_tracking/requirements.txt
 
 # Build — must run via the venv's python so colcon bakes in the right
 # interpreter (a bare `colcon build` always uses system Python here)
@@ -72,6 +74,37 @@ ros2 run human_perception bbox_keypoints_node --ros-args \
 ```
 
 (Default params live in `src/human_perception/config/bbox_keypoints.yaml`.)
+
+### human tracking / ReID
+
+```bash
+ros2 launch human_tracking human_tracking.launch.py
+```
+
+Subscribes to the raw camera image (`image_topic`, default
+`/camera/image_raw`) *and* `human_perception`'s detections
+(`detections_topic`, default `human_perception/detections`) — run both
+nodes together, since the tracker needs actual pixel crops for ReID, not
+just boxes. Publishes `human_tracking/tracked_detections`
+(`human_awareness_msgs/PersonDetectionArray`, reusing the same message
+type `human_perception` uses, with `track_id`/`state` populated for every
+currently-confirmed identity).
+
+```bash
+ros2 launch human_tracking human_tracking.launch.py \
+  params_file:=/path/to/my_params.yaml
+```
+
+```bash
+ros2 run human_tracking human_tracking_node --ros-args \
+  -p device:=cuda:0 -p reid_threshold:=0.6
+```
+
+`device` controls the OSNet ReID embedder (`cpu` by default); `cuda:0`
+gives a 5-7x speedup with identical tracking results if a GPU is
+available. (Default params live in
+`src/human_tracking/config/human_tracking.yaml`; see
+`docs/context/human_tracking.md` for what each one trades off.)
 
 ## Testing on a static image (no ROS2 needed)
 
@@ -135,6 +168,11 @@ python3 scripts/test_human_tracking_on_video.py path/to/video.mp4 \
 python3 scripts/test_human_tracking_on_video.py path/to/video.mp4 \
   --reid-threshold 0.65 --kalman-timeout 2.5 --gallery-timeout 45 \
   --reconcile-window 1.5
+
+# run the ReID embedder on a GPU instead of CPU (5-7x faster, verified
+# identical tracking results - see docs/context/human_tracking.md)
+python3 scripts/test_human_tracking_on_video.py path/to/video.mp4 \
+  --reid-device cuda:0
 ```
 
 `--reconcile-window` controls how long (in seconds) a just-created track

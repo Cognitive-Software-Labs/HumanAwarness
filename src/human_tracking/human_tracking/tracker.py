@@ -213,6 +213,7 @@ class Tracker:
             quality = crop_quality(d.confidence, d.bbox_xyxy, frame_area)
             motion_tracks[ti].mark_matched(
                 d.bbox_xyxy,
+                d.confidence,
                 d.keypoints,
                 gated_embeddings[di],
                 quality,
@@ -256,6 +257,7 @@ class Tracker:
             reclaimed_track = reid_pool[lost_ti]
             reclaimed_track.mark_matched(
                 d.bbox_xyxy,
+                d.confidence,
                 d.keypoints,
                 gated_embeddings[di],
                 quality,
@@ -286,6 +288,7 @@ class Tracker:
             quality = crop_quality(d.confidence, d.bbox_xyxy, frame_area)
             reid_pool[ti].mark_matched(
                 d.bbox_xyxy,
+                d.confidence,
                 d.keypoints,
                 gated_embeddings[di],
                 quality,
@@ -312,6 +315,7 @@ class Tracker:
             quality = crop_quality(d.confidence, d.bbox_xyxy, frame_area)
             new_track.mark_matched(
                 d.bbox_xyxy,
+                d.confidence,
                 d.keypoints,
                 gated_embeddings[di],
                 quality,

@@ -26,8 +26,8 @@ workspace under `src/`.
   YOLO26-pose (`human_perception` node, `human_awareness_msgs` interfaces).
   See `docs/context/bbox_keypoints.md`.
 - **human tracking / ReID** — persistent identity across occlusion
-  (Kalman motion + OSNet appearance matching). Core logic + standalone
-  test script only, not yet a ROS2 package. See
+  (Kalman motion + OSNet appearance matching), wired into a ROS2 node
+  (`human_tracking` package, `human_tracking_node`). See
   `docs/context/human_tracking.md`.
 
 <!--

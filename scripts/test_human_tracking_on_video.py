@@ -64,6 +64,7 @@ def main():
     parser.add_argument("video", help="path to a video file")
     parser.add_argument("--det-model", default="yolo26n-pose.pt")
     parser.add_argument("--reid-weights", default=None, help="path to osnet_x1_0 weights (default: ~/.cache)")
+    parser.add_argument("--reid-device", default="cpu", help="e.g. cpu, cuda:0 - device for the OSNet embedder")
     parser.add_argument("--conf", type=float, default=0.5)
     parser.add_argument("--reid-threshold", type=float, default=0.65)
     parser.add_argument("--reid-margin", type=float, default=0.08)
@@ -105,7 +106,7 @@ def main():
 
     print("Loading detector + ReID embedder...")
     detector = YOLO(args.det_model)
-    embedder = ReIDEmbedder(weights_path=args.reid_weights)
+    embedder = ReIDEmbedder(weights_path=args.reid_weights, device=args.reid_device)
 
     tracker = Tracker(
         reid_threshold=args.reid_threshold,

@@ -10,11 +10,14 @@ detection drops out for a frame or two.
 
 ## Status
 
-**Core tracking/ReID logic only, validated via a standalone test script
-(`scripts/test_human_tracking_on_video.py`). Not yet wired into a ROS2
-node or packaged** (`src/human_tracking` currently has no `package.xml`/
-`setup.py` — it's a plain importable Python module, not yet buildable
-with `colcon`). That packaging is the clear next step, not done yet.
+Wired into a real ROS2 node (`human_tracking_node`), buildable with
+`colcon` (`package.xml`/`setup.py` added), and verified end-to-end: a
+synthetic Image + `PersonDetectionArray` pair published in-process to the
+node correctly promoted a track to `ACTIVE` after exactly `confirm_frames`
+(3) frames and republished it with the right `track_id`/`state`/bbox/
+keypoints. Core logic is still also validated via the standalone test
+script (`scripts/test_human_tracking_on_video.py`), which remains the
+primary tool for testing against real video.
 
 ## Lifecycle
 
@@ -175,19 +178,51 @@ within that window.
   to be raised again, or made context-dependent, before trusting it
   anywhere a crowd is plausible.
 
+## ROS2 integration (`human_tracking_node`)
+
+- **Reuses `PersonDetection`/`PersonDetectionArray` for output instead of a
+  parallel `TrackedPerson` type.** `PersonDetection` already had a
+  `track_id` field (-1 if untracked) and reused `Keypoint2D[]`; the only
+  real gap was a `state` field for the lifecycle status, so that's what
+  got added to the existing message rather than duplicating its
+  bbox/confidence/keypoints schema in a second type.
+- **Subscribes to two topics, synchronized**: the raw camera image
+  (`image_topic`) and `human_perception`'s detections (`detections_topic`),
+  via `message_filters.ApproximateTimeSynchronizer`. The tracker needs
+  actual pixel crops for ReID, which a detections-only message doesn't
+  carry - approximate (not exact) sync tolerates the small clock/
+  serialization jitter expected between two separately-published topics
+  from what is logically the same source frame.
+- **`dt_seconds` comes from consecutive image header stamps**, not an
+  assumed fixed frame rate (unlike the standalone test script, which
+  reads it once from the video file) - the lifecycle timeouts
+  (`kalman_timeout_s` etc.) are real-time thresholds and need the actual
+  elapsed time between processed frames, which can vary with real
+  message-passing overhead.
+- **Verified end-to-end** (not just "it builds"): a synthetic Image +
+  `PersonDetectionArray` pair, published in-process to a live
+  `HumanTrackingNode` for 5 frames, correctly produced a confirmed
+  `track_id=1` with `state="ACTIVE"` after exactly `confirm_frames` (3)
+  frames, with the published bbox/keypoints round-tripping correctly.
+- **GPU path tested, not just present**: `ReIDEmbedder` already accepted a
+  `device` argument; actually running it with `device="cuda:0"` (and the
+  node's `device` parameter) on real test clips gave identical tracking
+  results to CPU (same ids, same reconciliation events) with a 5-7x
+  speedup (e.g. 8.3fps -> 43.1fps on a 5-person clip) - confirms the path
+  is both correct and worth using once a GPU is available in deployment.
+
 ## Not done yet
 
-- No ROS2 package/node - core logic only, see Status above.
-- No message type designed yet for publishing tracked identities (would
-  need a `TrackedPerson`/`TrackedPersonArray`-style addition to
-  `human_awareness_msgs`, analogous to `PersonDetection`/`PersonDetectionArray`).
-- `reid_threshold=0.65`, and now also the reconciliation stage, not
-  re-validated against the crowded-scene false-positive case (see above) -
-  likely needs revisiting once there's a concrete multi-person test
-  scenario that matters for the real deployment (not just the extreme
-  crowd stress-test).
-- OSNet runs on CPU by default in `ReIDEmbedder`; no GPU path tested.
-  The torso-embedding addition roughly doubles per-detection embedding
-  cost (two forward passes instead of one), measured as ~14fps -> ~10fps
-  on a 5-person clip on CPU - likely the first place to look if a GPU
-  path becomes necessary.
+- `reid_threshold=0.65`, and the reconciliation stage, not re-validated
+  against the crowded-scene false-positive case (see above) - likely
+  needs revisiting once there's a concrete multi-person test scenario
+  that matters for the real deployment (not just the extreme crowd
+  stress-test). This is the one known gap from before that's still open.
+- The ROS2 node has not been tested against a live camera topic (same
+  `/dev/video0` permissions blocker noted in `docs/context/bbox_keypoints.md`
+  applies here too) or against `human_perception`'s node actually running
+  live - only verified with synthetic messages published directly, per
+  the ROS2 integration section above.
+- No automated test suite (`ament_copyright`/`ament_flake8`/`ament_pep257`
+  are declared as `test_depend` in `package.xml`, matching `human_perception`'s
+  convention, but no actual test files exist yet in either package).

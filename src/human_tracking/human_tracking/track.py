@@ -148,6 +148,7 @@ class Track:
         self.age_seconds = 0.0  # time since creation - used for the reconciliation grace window
 
         self.last_bbox = bbox_xyxy
+        self.last_confidence = 0.0
         self.last_keypoints = []
         self.last_match_via_reid = False
 
@@ -194,6 +195,7 @@ class Track:
     def mark_matched(
         self,
         bbox_xyxy: tuple[float, float, float, float],
+        confidence: float,
         keypoints,
         embedding: np.ndarray | None,
         quality: float,
@@ -217,6 +219,7 @@ class Track:
             self.kalman.update(bbox_xyxy)
 
         self.last_bbox = bbox_xyxy
+        self.last_confidence = confidence
         self.last_keypoints = keypoints
         self.last_match_via_reid = snap_kalman
         self.seconds_since_last_seen = 0.0
