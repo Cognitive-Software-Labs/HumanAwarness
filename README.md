@@ -117,9 +117,11 @@ python3 scripts/test_human_tracking_on_video.py path/to/video.mp4
 ```
 
 Saves an annotated copy to `test_output/<name>_tracked.mp4` — only
-`ACTIVE` tracks are drawn (a lost track has no reliable position to show)
-— and prints the number of confirmed identities plus how many were
-recovered via simple motion re-match vs. via ReID. Useful flags:
+`ACTIVE` tracks are drawn (a lost track has no reliable position to show),
+with the pose skeleton overlaid — and prints the number of confirmed
+identities (and how many were later reclaimed back into an older identity
+by reconciliation — see below) plus how many were recovered via simple
+motion re-match vs. via ReID. Useful flags:
 
 ```bash
 # simulate a detection dropout (e.g. to force/demo a LOST_GALLERY -> ACTIVE
@@ -131,12 +133,18 @@ python3 scripts/test_human_tracking_on_video.py path/to/video.mp4 \
 # tune the lifecycle/matching parameters (see docs/context/human_tracking.md
 # for what each one trades off, especially --reid-threshold)
 python3 scripts/test_human_tracking_on_video.py path/to/video.mp4 \
-  --reid-threshold 0.65 --kalman-timeout 2.5 --gallery-timeout 45
+  --reid-threshold 0.65 --kalman-timeout 2.5 --gallery-timeout 45 \
+  --reconcile-window 1.5
 ```
 
-See `docs/context/human_tracking.md` for what was actually tested
-(including real phone-recorded footage) and the known tradeoffs — in
-particular, the default `--reid-threshold` was lowered from an initially
-more conservative value after real testing, and that change has not been
-re-validated against the crowded-scene false-positive case documented
-there.
+`--reconcile-window` controls how long (in seconds) a just-created track
+can still lose its detection to an older lost identity via ReID instead of
+staying a separate person — this is what lets a reappearance get
+recognized a few frames late (e.g. once enough of the body becomes
+visible again) instead of permanently splitting into two identities. See
+`docs/context/human_tracking.md` for what was actually tested (including
+real phone-recorded footage) and the known tradeoffs — in particular, the
+default `--reid-threshold` was lowered from an initially more
+conservative value after real testing, and neither that change nor the
+reconciliation stage has been re-validated against the crowded-scene
+false-positive case documented there.

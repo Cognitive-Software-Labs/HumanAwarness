@@ -26,6 +26,29 @@ _MSMT17_GDRIVE_ID = "1IosIFlLiulGIjwW3H8uMRmx3MzPwf86x"
 _INPUT_HW = (256, 128)  # OSNet's expected (height, width)
 
 
+def _letterbox_resize(rgb: np.ndarray, target_hw: tuple[int, int]) -> np.ndarray:
+    """Resize into `target_hw` preserving aspect ratio, padding the rest with
+    black instead of stretching to fill it.
+
+    A plain cv2.resize to OSNet's fixed 256x128 distorts a partial-body crop's
+    proportions (e.g. a half-body view gets squished into a full-body-shaped
+    box) in a way OSNet never saw in training - ReID benchmarks are almost
+    all full-body pedestrian crops. Letterboxing keeps the person's actual
+    proportions intact; the model just sees some black padding instead.
+    """
+    target_h, target_w = target_hw
+    src_h, src_w = rgb.shape[:2]
+    scale = min(target_w / src_w, target_h / src_h)
+    new_w, new_h = max(1, round(src_w * scale)), max(1, round(src_h * scale))
+    resized = cv2.resize(rgb, (new_w, new_h))
+
+    canvas = np.zeros((target_h, target_w, 3), dtype=rgb.dtype)
+    y_off = (target_h - new_h) // 2
+    x_off = (target_w - new_w) // 2
+    canvas[y_off : y_off + new_h, x_off : x_off + new_w] = resized
+    return canvas
+
+
 def _default_cache_path() -> Path:
     cache_dir = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "human_tracking"
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -62,7 +85,7 @@ class ReIDEmbedder:
         batch = torch.empty(len(valid_idx), 3, *_INPUT_HW, dtype=torch.float32)
         for batch_i, crop_i in enumerate(valid_idx):
             rgb = cv2.cvtColor(bgr_crops[crop_i], cv2.COLOR_BGR2RGB)
-            resized = cv2.resize(rgb, (_INPUT_HW[1], _INPUT_HW[0]))
+            resized = _letterbox_resize(rgb, _INPUT_HW)
             batch[batch_i] = torch.from_numpy(resized).permute(2, 0, 1).float() / 255.0
 
         batch = batch.to(self.device)

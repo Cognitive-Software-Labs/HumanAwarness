@@ -32,6 +32,14 @@ externally once confirmed (`ACTIVE` or a still-recoverable `LOST_*`),
 matching the idea that awareness state belongs to a confirmed identity,
 not a raw unconfirmed detection blip.
 
+On top of this, any `NEW` or `ACTIVE` track can still lose its current
+detection to an older `LOST_KALMAN`/`LOST_GALLERY` identity via ReID, for
+`reconcile_window_s` (default 1.5s) after its own creation — see
+"Reconciliation" below. When that happens the young track is discarded
+entirely and the reclaimed identity takes its place; a `track_id` a
+caller already saw published can therefore be superseded by an older one
+within that window.
+
 ## Design decisions
 
 - **Motion model**: a minimal vendored constant-velocity Kalman filter
@@ -82,6 +90,47 @@ not a raw unconfirmed detection blip.
   × crop size, see `crop_quality`) rather than first-seen-first-kept, so a
   track's stored appearance stays representative even if its first few
   samples were poor.
+- **Letterbox-preserving resize** (`reid_embedder.py`): every crop is
+  resized into OSNet's fixed 256x128 input by scaling to fit and padding
+  with black, not by stretching to fill it. A plain stretch distorts a
+  partial-body crop's proportions (e.g. a half-body view gets squished
+  into a full-body-shaped box) in a way OSNet never saw in training -
+  ReID benchmarks are almost all full-body crops. Measured effect on a
+  real partial-view reappearance: cosine similarity 0.490 -> 0.508 - real
+  but modest, since it fixes distortion, not missing information.
+- **Torso-only region matching** (`torso_crop_bbox`, `Track.best_similarity`):
+  alongside the full-crop embedding, a second embedding is computed from
+  just the shoulders-to-hips region (derived from pose keypoints) when
+  confident shoulder+hip keypoints exist. A track's gallery stores both;
+  matching compares both and takes the max. This is a pragmatic
+  approximation of part-based/visibility-aware ReID (not a retrained part
+  model) aimed at the case where a full-body gallery sample and a
+  partial/edge-clipped reappearance aren't comparable as whole-crop
+  embeddings, but both still show *some* torso. It doesn't help when the
+  pose model itself can't place shoulder/hip keypoints on the reappearance
+  crop at all (confirmed on a real case - see Reconciliation below), since
+  there's then no torso region to extract on that side either.
+- **Reconciliation stage** (`Tracker.update`'s "stage 1.5"): a real
+  phone-recorded exit/re-entry test showed that a person's first
+  reappearance frame can have keypoints too degraded for ReID to
+  recognize them (shoulder/hip confidence 0.02-0.12 - torso matching
+  above can't help either), while the *same* track's keypoints become
+  confident again just ~7 frames (~0.2s) later as they walk further into
+  frame. Without this stage, that's already too late: a brand-new track
+  claims the detection on the bad frame and then wins every subsequent
+  motion/IoU match, so the original lost identity never gets a second
+  chance. The fix: for `reconcile_window_s` (default 1.5s) after a
+  track's creation, it can still lose its current detection to an older
+  `LOST_KALMAN`/`LOST_GALLERY` identity via the same ReID spatial-gate +
+  margin logic used elsewhere - if that happens, the young track (and any
+  `track_id` it may have already had assigned) is discarded and the
+  reclaimed identity takes its place. Verified on the real clip: 2
+  confirmed ids -> 1 reconciled -> 1 net identity, with zero regressions
+  on the two previously-correct clips and zero false reconciliations in a
+  5-person clip. **Not re-tested against the crowded-scene stress case**
+  (that footage was deleted earlier) - a second ReID-matching opportunity
+  per track is, in principle, a second chance for a wrong match too, even
+  though none appeared in the tests run so far.
 
 ## Parameters (`Tracker.__init__`)
 
@@ -95,13 +144,14 @@ not a raw unconfirmed detection blip.
 | `reid_margin` | 0.08 | required similarity gap over the runner-up candidate |
 | `max_speed_bbox_heights_per_sec` | 3.0 | spatial gate speed limit, in bbox-heights/sec |
 | `gallery_size` | 8 | embeddings kept per track |
+| `reconcile_window_s` | 1.5 | how long a new/young track can still lose its detection to an older identity via ReID |
 
 ### `reid_threshold`: the real tradeoff, found empirically
 
-- At **0.75**: a clean, single-person-at-a-time test (`man_followed_city.mp4`,
-  with a simulated detection dropout) recovered correctly. But spot-checking
-  a crowded scene (`japan_street.mp4`, ~10+ simultaneous `LOST_GALLERY`
-  candidates) found real, confirmed false-positive merges between
+- At **0.75**: a clean, single-person-at-a-time test (with a simulated
+  detection dropout) recovered correctly. But spot-checking a crowded
+  scene (~10+ simultaneous `LOST_GALLERY` candidates) found real, confirmed
+  false-positive merges between
   different people even after the spatial gate + margin + plausibility
   fixes above - the scores for *wrong* matches spread into the 0.5-0.84
   range once there are many candidates, overlapping with correct-match
@@ -131,8 +181,13 @@ not a raw unconfirmed detection blip.
 - No message type designed yet for publishing tracked identities (would
   need a `TrackedPerson`/`TrackedPersonArray`-style addition to
   `human_awareness_msgs`, analogous to `PersonDetection`/`PersonDetectionArray`).
-- `reid_threshold=0.65` not re-validated against the crowded-scene
-  false-positive case (see above) - likely needs revisiting once there's
-  a concrete multi-person test scenario that matters for the real
-  deployment (not just the extreme crowd stress-test).
+- `reid_threshold=0.65`, and now also the reconciliation stage, not
+  re-validated against the crowded-scene false-positive case (see above) -
+  likely needs revisiting once there's a concrete multi-person test
+  scenario that matters for the real deployment (not just the extreme
+  crowd stress-test).
 - OSNet runs on CPU by default in `ReIDEmbedder`; no GPU path tested.
+  The torso-embedding addition roughly doubles per-detection embedding
+  cost (two forward passes instead of one), measured as ~14fps -> ~10fps
+  on a 5-person clip on CPU - likely the first place to look if a GPU
+  path becomes necessary.

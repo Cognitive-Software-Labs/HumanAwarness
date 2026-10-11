@@ -23,14 +23,40 @@ import cv2
 from ultralytics import YOLO
 
 from human_tracking.reid_embedder import ReIDEmbedder
-from human_tracking.track import ACTIVE, LOST_GALLERY, LOST_KALMAN
+from human_tracking.track import ACTIVE, LOST_GALLERY, LOST_KALMAN, torso_crop_bbox
 from human_tracking.tracker import Detection, Tracker
 
-STATE_COLORS = {
-    ACTIVE: (0, 200, 0),       # green
-    LOST_KALMAN: (0, 165, 255),  # orange
-    LOST_GALLERY: (0, 0, 255),   # red
-}
+# Only ACTIVE tracks are ever drawn (see the main loop) - a lost track has
+# no reliable current position to show - so there is just one draw color.
+ACTIVE_COLOR = (0, 200, 0)  # green
+
+# Standard COCO-17 keypoint order + skeleton edges (same pairs Ultralytics'
+# own pose plotting uses), 0-indexed.
+KEYPOINT_SKELETON = [
+    (15, 13), (13, 11), (16, 14), (14, 12), (11, 12),
+    (5, 11), (6, 12), (5, 6), (5, 7), (6, 8),
+    (7, 9), (8, 10), (1, 2), (0, 1), (0, 2), (1, 3), (2, 4), (3, 5), (4, 6),
+]
+MIN_KEYPOINT_CONF_TO_DRAW = 0.3
+
+
+def draw_keypoints(frame, keypoints: list[tuple[float, float, float]], color) -> None:
+    """Draw keypoint dots + skeleton lines for keypoints confident enough to trust."""
+    confident = [conf >= MIN_KEYPOINT_CONF_TO_DRAW for _x, _y, conf in keypoints]
+
+    for i, j in KEYPOINT_SKELETON:
+        if i >= len(keypoints) or j >= len(keypoints):
+            continue
+        if not (confident[i] and confident[j]):
+            continue
+        xi, yi, _ = keypoints[i]
+        xj, yj, _ = keypoints[j]
+        cv2.line(frame, (int(xi), int(yi)), (int(xj), int(yj)), color, 2, cv2.LINE_AA)
+
+    for (x, y, conf), is_confident in zip(keypoints, confident):
+        if not is_confident:
+            continue
+        cv2.circle(frame, (int(x), int(y)), 3, color, -1, cv2.LINE_AA)
 
 
 def main():
@@ -44,6 +70,13 @@ def main():
     parser.add_argument("--max-speed", type=float, default=3.0, help="bbox-heights/sec a lost track may have moved")
     parser.add_argument("--kalman-timeout", type=float, default=2.5, help="seconds")
     parser.add_argument("--gallery-timeout", type=float, default=45.0, help="seconds")
+    parser.add_argument(
+        "--reconcile-window",
+        type=float,
+        default=1.5,
+        help="seconds after a track's creation during which it can still lose its detection "
+        "to an older lost identity via ReID (see tracker.py's module docstring)",
+    )
     parser.add_argument("--output-dir", default="test_output")
     parser.add_argument(
         "--blackout",
@@ -80,6 +113,7 @@ def main():
         max_speed_bbox_heights_per_sec=args.max_speed,
         kalman_timeout_s=args.kalman_timeout,
         gallery_timeout_s=args.gallery_timeout,
+        reconcile_window_s=args.reconcile_window,
     )
 
     cap = cv2.VideoCapture(str(video_path))
@@ -99,9 +133,12 @@ def main():
     ever_active_ids = set()
     lost_kalman_recoveries = 0
     reid_recoveries = 0
-    # Track which ids we've seen in LOST_KALMAN / LOST_GALLERY, to count recoveries
-    seen_lost_kalman: set[int] = set()
-    seen_lost_gallery: set[int] = set()
+    # Track ids currently in some lost state, to detect the frame a track
+    # comes back to ACTIVE. Which *mechanism* recovered it (motion/IoU vs
+    # ReID) is read from t.last_match_via_reid, not from which lost state it
+    # was in - a LOST_KALMAN track can also be recovered via ReID fallback
+    # (see tracker.py), so the lost state alone isn't a reliable proxy.
+    seen_lost: set[int] = set()
 
     for result in stream:
         frame = result.orig_img
@@ -109,6 +146,7 @@ def main():
         keypoints = result.keypoints
 
         crops = []
+        torso_crops = []
         dets_meta = []
         if boxes is not None:
             for i in range(len(boxes)):
@@ -122,11 +160,22 @@ def main():
                     kp = []
                 dets_meta.append(((x1, y1, x2, y2), float(boxes.conf[i]), kp))
 
-        embeddings = embedder.embed(crops) if crops else []
+                torso_bbox = torso_crop_bbox(kp, (x1, y1, x2, y2)) if kp else None
+                if torso_bbox is not None:
+                    tx1, ty1, tx2, ty2 = torso_bbox
+                    torso_crops.append(frame[max(0, int(ty1)) : int(ty2), max(0, int(tx1)) : int(tx2)])
+                else:
+                    torso_crops.append(None)
+
+        # Embed full + torso crops in one batched call (embed() already
+        # treats a None entry as "no embedding for this one").
+        n = len(crops)
+        all_embeddings = embedder.embed(crops + torso_crops) if crops else []
+        embeddings, torso_embeddings = all_embeddings[:n], all_embeddings[n:]
 
         detections = [
-            Detection(bbox_xyxy=bbox, confidence=conf, keypoints=kp, embedding=emb)
-            for (bbox, conf, kp), emb in zip(dets_meta, embeddings)
+            Detection(bbox_xyxy=bbox, confidence=conf, keypoints=kp, embedding=emb, torso_embedding=temb)
+            for (bbox, conf, kp), emb, temb in zip(dets_meta, embeddings, torso_embeddings)
         ]
 
         in_blackout = blackout_start is not None and blackout_start <= frame_count < blackout_end
@@ -138,17 +187,14 @@ def main():
         annotated = frame.copy()
         for t in published:
             ever_active_ids.add(t.track_id)
-            if t.state == LOST_KALMAN and t.track_id not in seen_lost_kalman:
-                seen_lost_kalman.add(t.track_id)
-            if t.state == LOST_GALLERY and t.track_id not in seen_lost_gallery:
-                seen_lost_gallery.add(t.track_id)
-            if t.state == ACTIVE:
-                if t.track_id in seen_lost_kalman:
-                    lost_kalman_recoveries += 1
-                    seen_lost_kalman.discard(t.track_id)
-                if t.track_id in seen_lost_gallery:
+            if t.state in (LOST_KALMAN, LOST_GALLERY):
+                seen_lost.add(t.track_id)
+            elif t.state == ACTIVE and t.track_id in seen_lost:
+                seen_lost.discard(t.track_id)
+                if t.last_match_via_reid:
                     reid_recoveries += 1
-                    seen_lost_gallery.discard(t.track_id)
+                else:
+                    lost_kalman_recoveries += 1
 
             if t.state != ACTIVE:
                 # Lost tracks have no reliable current position to show - a
@@ -156,10 +202,12 @@ def main():
                 continue
 
             x1, y1, x2, y2 = (int(v) for v in t.kalman.bbox)
-            color = STATE_COLORS.get(t.state, (255, 255, 255))
-            cv2.rectangle(annotated, (x1, y1), (x2, y2), color, 2)
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), ACTIVE_COLOR, 2)
             label = f"id {t.track_id} [{t.state}]"
-            cv2.putText(annotated, label, (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2, cv2.LINE_AA)
+            cv2.putText(
+                annotated, label, (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, ACTIVE_COLOR, 2, cv2.LINE_AA
+            )
+            draw_keypoints(annotated, t.last_keypoints, ACTIVE_COLOR)
 
         if in_blackout:
             cv2.putText(
@@ -179,9 +227,20 @@ def main():
     writer.release()
     elapsed = time.time() - t_start
     print(f"Processed {frame_count} frames in {elapsed:.1f}s ({frame_count/elapsed:.1f} fps)")
-    print(f"Total confirmed identities ever seen: {len(ever_active_ids)}")
-    print(f"Recoveries via Kalman-only re-match (LOST_KALMAN -> ACTIVE): {lost_kalman_recoveries}")
-    print(f"Recoveries via ReID gallery match (LOST_GALLERY -> ACTIVE): {reid_recoveries}")
+    # Set difference, not a count subtraction: a merge can in principle land
+    # on the very same frame a track is promoted (confirm_frames hits and a
+    # reconciliation match both resolving that frame), in which case the
+    # merged id was never actually published and was never in
+    # ever_active_ids to begin with - subtracting counts would wrongly
+    # dock it twice.
+    net_ids = ever_active_ids - set(tracker.merged_ids.keys())
+    print(f"Distinct track ids ever confirmed: {len(ever_active_ids)}")
+    print(
+        f"Of those, later reclaimed by reconciliation (same person, id merged back): {len(tracker.merged_ids)}"
+    )
+    print(f"Net distinct identities: {len(net_ids)}")
+    print(f"Recoveries via motion/IoU re-match: {lost_kalman_recoveries}")
+    print(f"Recoveries via ReID (appearance) match: {reid_recoveries}")
     print(f"-> {out_path}")
 
 

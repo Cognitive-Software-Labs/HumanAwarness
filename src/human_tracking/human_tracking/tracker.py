@@ -26,6 +26,21 @@ scene):
 - a similarity margin: a candidate match is only accepted if it clearly
   beats whatever else that track or detection could instead match to -
   an ambiguous near-tie is left unmatched rather than guessed at.
+
+A third stage, reconciliation, runs right after stage 1: a just-created
+(or just-reconfirmed) track is still allowed to lose its detection to an
+older lost identity via ReID, for a short grace window after its own
+creation. This exists because a person's first reappearance frame(s) can
+have too little information for ReID to recognize them immediately (e.g.
+too few confident keypoints on a small/edge-clipped crop) even though the
+very same person becomes clearly recognizable a few frames later - by
+which point, without this stage, a brand-new track would already have
+claimed every subsequent detection via motion/IoU, and the original lost
+identity would never get another chance (docs/context/human_tracking.md
+has the real case this fixes). When reconciliation accepts a match, the
+young track's identity is discarded and the older, reclaimed identity
+takes over its position - so a track_id a caller already saw published
+can be superseded by an older one within the grace window.
 """
 
 from dataclasses import dataclass
@@ -35,12 +50,71 @@ import numpy as np
 from human_tracking.track import ACTIVE, LOST_GALLERY, LOST_KALMAN, NEW, Track, crop_quality, is_plausible_person_crop
 
 
+def _find_reid_matches(
+    lost_pool: list[Track],
+    candidates: list[tuple[int, tuple[float, float], np.ndarray | None, np.ndarray | None]],
+    max_speed_bbox_heights_per_sec: float,
+    reid_threshold: float,
+    reid_margin: float,
+    dt_seconds: float,
+    excluded_pool_idx: frozenset[int] = frozenset(),
+) -> dict[int, int]:
+    """Greedily match `lost_pool` tracks against `candidates` by appearance
+    similarity, gated by a spatial plausibility check (see module docstring)
+    and resolved with a similarity margin against the runner-up on either
+    side. Each candidate is `(key, center_xy, embedding, torso_embedding)`.
+    Returns `{lost_pool_index: candidate_key}` for accepted matches.
+    """
+    pairs = []
+    for ti, t in enumerate(lost_pool):
+        if ti in excluded_pool_idx:
+            continue
+        track_center = _bbox_center(t.last_bbox)
+        track_scale = _bbox_height(t.last_bbox)
+        max_dist = max_speed_bbox_heights_per_sec * track_scale * max(t.seconds_since_last_seen, dt_seconds)
+        for key, center, emb, temb in candidates:
+            if emb is None:
+                continue
+            dist = ((track_center[0] - center[0]) ** 2 + (track_center[1] - center[1]) ** 2) ** 0.5
+            if dist > max_dist:
+                continue  # spatial gate: too far to plausibly be the same person
+            sim = t.best_similarity(emb, temb)
+            if sim >= reid_threshold:
+                pairs.append((sim, ti, key))
+    pairs.sort(key=lambda p: p[0], reverse=True)
+
+    matches: dict[int, int] = {}
+    resolved_tracks: set[int] = set()
+    resolved_keys: set[int] = set()
+    for pi, (sim, ti, key) in enumerate(pairs):
+        if ti in resolved_tracks or key in resolved_keys:
+            continue
+        # similarity margin: only accept if this candidate clearly beats whatever
+        # else remains available for the same track or the same candidate - an
+        # ambiguous near-tie is left unmatched rather than guessed at this frame.
+        runner_up = max(
+            (
+                s2
+                for s2, t2, k2 in pairs[pi + 1 :]
+                if (t2 == ti or k2 == key) and t2 not in resolved_tracks and k2 not in resolved_keys
+            ),
+            default=None,
+        )
+        resolved_tracks.add(ti)
+        resolved_keys.add(key)
+        if runner_up is not None and (sim - runner_up) < reid_margin:
+            continue
+        matches[ti] = key
+    return matches
+
+
 @dataclass
 class Detection:
     bbox_xyxy: tuple[float, float, float, float]
     confidence: float
     keypoints: list[tuple[float, float, float]]  # per-keypoint (x, y, confidence)
     embedding: np.ndarray | None
+    torso_embedding: np.ndarray | None = None  # see track.torso_crop_bbox
 
 
 def compute_iou(box_a: tuple[float, float, float, float], box_b: tuple[float, float, float, float]) -> float:
@@ -75,6 +149,7 @@ class Tracker:
         confirm_frames: int = 3,
         kalman_timeout_s: float = 2.5,
         gallery_timeout_s: float = 45.0,
+        reconcile_window_s: float = 1.5,
     ):
         self.tracks: list[Track] = []
         self.gallery_size = gallery_size
@@ -85,18 +160,32 @@ class Tracker:
         self.confirm_frames = confirm_frames
         self.kalman_timeout_s = kalman_timeout_s
         self.gallery_timeout_s = gallery_timeout_s
+        self.reconcile_window_s = reconcile_window_s
+        # {abandoned_track_id: surviving_track_id} for every reconciliation
+        # merge so far - a caller that already published `abandoned_track_id`
+        # knows it was retroactively superseded, not actually a separate person.
+        self.merged_ids: dict[int, int] = {}
 
     def update(self, detections: list[Detection], frame_area: float, dt_seconds: float) -> list[Track]:
+        for t in self.tracks:
+            t.age_seconds += dt_seconds
+
         motion_tracks = [t for t in self.tracks if t.state in (NEW, ACTIVE, LOST_KALMAN)]
         gallery_tracks = [t for t in self.tracks if t.state == LOST_GALLERY]
 
         # Gate embeddings once up front: a crop without enough confident,
         # spread-out keypoints (see is_plausible_person_crop) never
         # contributes to a gallery and never acts as a ReID match
-        # candidate, whether incoming or stored.
+        # candidate, whether incoming or stored. Both the full-crop and the
+        # torso-only embedding are gated by the same plausibility check - if
+        # the crop as a whole isn't trustworthy, neither reading from it is.
+        plausible = [is_plausible_person_crop(d.keypoints, d.bbox_xyxy) for d in detections]
         gated_embeddings: list[np.ndarray | None] = [
-            d.embedding if (d.embedding is not None and is_plausible_person_crop(d.keypoints, d.bbox_xyxy)) else None
-            for d in detections
+            d.embedding if (d.embedding is not None and p) else None for d, p in zip(detections, plausible)
+        ]
+        gated_torso_embeddings: list[np.ndarray | None] = [
+            d.torso_embedding if (d.torso_embedding is not None and p) else None
+            for d, p in zip(detections, plausible)
         ]
 
         for t in motion_tracks:
@@ -113,81 +202,100 @@ class Tracker:
 
         matched_track_idx: set[int] = set()
         matched_det_idx: set[int] = set()
+        track_to_det: dict[int, int] = {}
         for _iou, ti, di in pairs:
             if ti in matched_track_idx or di in matched_det_idx:
                 continue
             matched_track_idx.add(ti)
             matched_det_idx.add(di)
+            track_to_det[ti] = di
             d = detections[di]
             quality = crop_quality(d.confidence, d.bbox_xyxy, frame_area)
             motion_tracks[ti].mark_matched(
-                d.bbox_xyxy, d.confidence, d.keypoints, gated_embeddings[di], quality, self.confirm_frames
+                d.bbox_xyxy,
+                d.keypoints,
+                gated_embeddings[di],
+                quality,
+                self.confirm_frames,
+                torso_embedding=gated_torso_embeddings[di],
             )
 
         unmatched_detections = [(di, d) for di, d in enumerate(detections) if di not in matched_det_idx]
 
-        # --- stage 2: ReID matching ---
-        # Pool = every LOST_GALLERY track, plus any LOST_KALMAN track that
-        # just failed its motion match this frame (see module docstring).
+        # Pool shared by both remaining stages: every LOST_GALLERY track,
+        # plus any LOST_KALMAN track that just failed its motion match this
+        # frame (see module docstring).
         failed_lost_kalman = [
             t for ti, t in enumerate(motion_tracks) if ti not in matched_track_idx and t.state == LOST_KALMAN
         ]
         reid_pool = gallery_tracks + failed_lost_kalman
 
-        reid_pairs = []
-        for ti, t in enumerate(reid_pool):
-            track_center = _bbox_center(t.last_bbox)
-            track_scale = _bbox_height(t.last_bbox)
-            max_dist = self.max_speed_bbox_heights_per_sec * track_scale * max(t.seconds_since_last_seen, dt_seconds)
-            for ui, (di, d) in enumerate(unmatched_detections):
-                emb = gated_embeddings[di]
-                if emb is None:
-                    continue
-                det_center = _bbox_center(d.bbox_xyxy)
-                dist = ((track_center[0] - det_center[0]) ** 2 + (track_center[1] - det_center[1]) ** 2) ** 0.5
-                if dist > max_dist:
-                    continue  # spatial gate: too far to plausibly be the same person
-                sim = t.best_similarity(emb)
-                if sim >= self.reid_threshold:
-                    reid_pairs.append((sim, ti, ui))
-        reid_pairs.sort(key=lambda p: p[0], reverse=True)
-
-        matched_pool_idx: set[int] = set()
-        matched_udet_idx: set[int] = set()
-        # A track/detection is "resolved" once touched by its best remaining
-        # candidate, whether that candidate is accepted or rejected for being
-        # ambiguous - either way it must not fall through and match a worse
-        # candidate afterward.
-        resolved_tracks: set[int] = set()
-        resolved_dets: set[int] = set()
-        for pi, (sim, ti, ui) in enumerate(reid_pairs):
-            if ti in resolved_tracks or ui in resolved_dets:
-                continue
-            # similarity margin: only accept if this candidate clearly beats whatever
-            # else remains available for the same track or the same detection - an
-            # ambiguous near-tie is left unmatched rather than guessed at this frame.
-            runner_up = max(
-                (
-                    s2
-                    for s2, t2, u2 in reid_pairs[pi + 1 :]
-                    if (t2 == ti or u2 == ui) and t2 not in resolved_tracks and u2 not in resolved_dets
-                ),
-                default=None,
+        # --- stage 1.5: reconciliation ---
+        # Give every just-(re)matched track that's still within its grace
+        # window a chance to lose its detection to an older lost identity
+        # instead - see module docstring for why this matters in practice.
+        reconcile_candidates = [
+            (ti, _bbox_center(motion_tracks[ti].last_bbox), gated_embeddings[di], gated_torso_embeddings[di])
+            for ti, di in track_to_det.items()
+            if motion_tracks[ti].age_seconds <= self.reconcile_window_s
+        ]
+        reconcile_matches = _find_reid_matches(
+            reid_pool,
+            reconcile_candidates,
+            self.max_speed_bbox_heights_per_sec,
+            self.reid_threshold,
+            self.reid_margin,
+            dt_seconds,
+        )
+        reconciled_young_tracks: set[Track] = set()
+        for lost_ti, young_ti in reconcile_matches.items():
+            young_track = motion_tracks[young_ti]
+            di = track_to_det[young_ti]
+            d = detections[di]
+            quality = crop_quality(d.confidence, d.bbox_xyxy, frame_area)
+            reclaimed_track = reid_pool[lost_ti]
+            reclaimed_track.mark_matched(
+                d.bbox_xyxy,
+                d.keypoints,
+                gated_embeddings[di],
+                quality,
+                self.confirm_frames,
+                torso_embedding=gated_torso_embeddings[di],
+                snap_kalman=True,
             )
-            resolved_tracks.add(ti)
-            resolved_dets.add(ui)
-            if runner_up is not None and (sim - runner_up) < self.reid_margin:
-                continue
-            matched_pool_idx.add(ti)
-            matched_udet_idx.add(ui)
+            if young_track.track_id is not None:
+                self.merged_ids[young_track.track_id] = reclaimed_track.track_id
+            reconciled_young_tracks.add(young_track)
+
+        # --- stage 2: ReID matching for whatever's left truly unmatched ---
+        det_candidates = [
+            (ui, _bbox_center(d.bbox_xyxy), gated_embeddings[di], gated_torso_embeddings[di])
+            for ui, (di, d) in enumerate(unmatched_detections)
+        ]
+        reid_matches = _find_reid_matches(
+            reid_pool,
+            det_candidates,
+            self.max_speed_bbox_heights_per_sec,
+            self.reid_threshold,
+            self.reid_margin,
+            dt_seconds,
+            excluded_pool_idx=frozenset(reconcile_matches.keys()),
+        )
+        for ti, ui in reid_matches.items():
             di, d = unmatched_detections[ui]
             quality = crop_quality(d.confidence, d.bbox_xyxy, frame_area)
             reid_pool[ti].mark_matched(
-                d.bbox_xyxy, d.confidence, d.keypoints, gated_embeddings[di], quality, self.confirm_frames, snap_kalman=True
+                d.bbox_xyxy,
+                d.keypoints,
+                gated_embeddings[di],
+                quality,
+                self.confirm_frames,
+                torso_embedding=gated_torso_embeddings[di],
+                snap_kalman=True,
             )
 
-        # --- advance whatever still wasn't matched by either stage ---
-        matched_pool_tracks = {reid_pool[ti] for ti in matched_pool_idx}
+        # --- advance whatever still wasn't matched by any stage ---
+        matched_pool_tracks = {reid_pool[ti] for ti in reid_matches} | {reid_pool[ti] for ti in reconcile_matches}
         for ti, t in enumerate(motion_tracks):
             if ti not in matched_track_idx and t not in matched_pool_tracks:
                 t.mark_missed(dt_seconds, self.kalman_timeout_s, self.gallery_timeout_s)
@@ -196,15 +304,21 @@ class Tracker:
                 t.mark_missed(dt_seconds, self.kalman_timeout_s, self.gallery_timeout_s)
 
         # --- spawn new tentative tracks for whatever's left unmatched ---
+        matched_udet_idx = set(reid_matches.values())
         for ui, (di, d) in enumerate(unmatched_detections):
             if ui in matched_udet_idx:
                 continue
             new_track = Track(d.bbox_xyxy, gallery_size=self.gallery_size)
             quality = crop_quality(d.confidence, d.bbox_xyxy, frame_area)
             new_track.mark_matched(
-                d.bbox_xyxy, d.confidence, d.keypoints, gated_embeddings[di], quality, self.confirm_frames
+                d.bbox_xyxy,
+                d.keypoints,
+                gated_embeddings[di],
+                quality,
+                self.confirm_frames,
+                torso_embedding=gated_torso_embeddings[di],
             )
             self.tracks.append(new_track)
 
-        self.tracks = [t for t in self.tracks if t.is_alive]
+        self.tracks = [t for t in self.tracks if t.is_alive and t not in reconciled_young_tracks]
         return [t for t in self.tracks if t.is_published]

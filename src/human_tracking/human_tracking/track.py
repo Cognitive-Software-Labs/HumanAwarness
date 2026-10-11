@@ -32,6 +32,48 @@ FORGOTTEN = "FORGOTTEN"
 class GalleryEntry:
     embedding: np.ndarray
     quality: float
+    torso_embedding: np.ndarray | None = None
+
+
+# COCO-17 indices for shoulders/hips - the torso region used by torso_crop_bbox.
+_LEFT_SHOULDER, _RIGHT_SHOULDER, _LEFT_HIP, _RIGHT_HIP = 5, 6, 11, 12
+
+
+def torso_crop_bbox(
+    keypoints: list[tuple[float, float, float]],
+    bbox_xyxy: tuple[float, float, float, float],
+    min_keypoint_conf: float = 0.3,
+    pad_frac: float = 0.05,
+) -> tuple[float, float, float, float] | None:
+    """Bounding box of just the torso (shoulders-to-hips), derived from
+    keypoints rather than a fixed fraction of the full bbox.
+
+    Used to get a second, region-matched embedding alongside the full-crop
+    one (see Track.best_similarity): a full-body view and a partial/
+    edge-clipped reappearance both usually still show *some* torso, even
+    when the full-crop embeddings describe very different amounts of
+    visible body and aren't directly comparable.
+
+    Returns None if there isn't at least one confident shoulder and one
+    confident hip keypoint - not enough vertical extent to call it "torso".
+    """
+    if len(keypoints) <= max(_LEFT_SHOULDER, _RIGHT_SHOULDER, _LEFT_HIP, _RIGHT_HIP):
+        return None
+
+    shoulders = [keypoints[i] for i in (_LEFT_SHOULDER, _RIGHT_SHOULDER) if keypoints[i][2] >= min_keypoint_conf]
+    hips = [keypoints[i] for i in (_LEFT_HIP, _RIGHT_HIP) if keypoints[i][2] >= min_keypoint_conf]
+    if not shoulders or not hips:
+        return None
+
+    xs = [p[0] for p in shoulders + hips]
+    ys = [p[1] for p in shoulders + hips]
+    x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    pad_x, pad_y = (x2 - x1) * pad_frac, (y2 - y1) * pad_frac
+    bx1, by1, bx2, by2 = bbox_xyxy
+    return (max(bx1, x1 - pad_x), max(by1, y1 - pad_y), min(bx2, x2 + pad_x), min(by2, y2 + pad_y))
 
 
 def is_plausible_person_crop(
@@ -103,54 +145,82 @@ class Track:
 
         self.consecutive_hits = 0
         self.seconds_since_last_seen = 0.0
+        self.age_seconds = 0.0  # time since creation - used for the reconciliation grace window
 
         self.last_bbox = bbox_xyxy
-        self.last_confidence = 0.0
         self.last_keypoints = []
+        self.last_match_via_reid = False
 
     def _assign_id(self) -> int:
         new_id = Track._next_id
         Track._next_id += 1
         return new_id
 
-    def update_gallery(self, embedding: np.ndarray | None, quality: float) -> None:
+    def update_gallery(
+        self, embedding: np.ndarray | None, quality: float, torso_embedding: np.ndarray | None = None
+    ) -> None:
         if embedding is None:
             return
         if len(self.gallery) < self.gallery_size:
-            self.gallery.append(GalleryEntry(embedding, quality))
+            self.gallery.append(GalleryEntry(embedding, quality, torso_embedding))
             return
         worst_idx = min(range(len(self.gallery)), key=lambda i: self.gallery[i].quality)
         if quality > self.gallery[worst_idx].quality:
-            self.gallery[worst_idx] = GalleryEntry(embedding, quality)
+            self.gallery[worst_idx] = GalleryEntry(embedding, quality, torso_embedding)
 
-    def best_similarity(self, embedding: np.ndarray) -> float:
-        """Max cosine similarity between `embedding` and anything in this track's gallery."""
+    def best_similarity(self, embedding: np.ndarray, torso_embedding: np.ndarray | None = None) -> float:
+        """Max cosine similarity between the query and anything in this track's
+        gallery - compared on the full-crop embedding, and also on the
+        torso-only embedding when both sides have one (see torso_crop_bbox).
+
+        The torso comparison is what lets a full-body gallery sample still
+        match a partial/edge-clipped reappearance: their full-crop embeddings
+        describe different amounts of visible body and are poorly comparable,
+        but their torso embeddings describe the same region on both sides.
+        """
         if not self.gallery:
             return -1.0
-        sims = [float(np.dot(embedding, entry.embedding)) for entry in self.gallery]
-        return max(sims)
+        best = max(float(np.dot(embedding, entry.embedding)) for entry in self.gallery)
+        if torso_embedding is not None:
+            torso_sims = [
+                float(np.dot(torso_embedding, entry.torso_embedding))
+                for entry in self.gallery
+                if entry.torso_embedding is not None
+            ]
+            if torso_sims:
+                best = max(best, max(torso_sims))
+        return best
 
     def mark_matched(
         self,
         bbox_xyxy: tuple[float, float, float, float],
-        confidence: float,
         keypoints,
         embedding: np.ndarray | None,
         quality: float,
         confirm_frames: int,
+        torso_embedding: np.ndarray | None = None,
         snap_kalman: bool = False,
     ) -> None:
-        """Record a successful match (direct motion/IoU match or ReID re-acquisition)."""
+        """Record a successful match (direct motion/IoU match or ReID re-acquisition).
+
+        `snap_kalman` is only ever passed True from one of the tracker's
+        appearance-matching branches (ReID or reconciliation), never from a
+        plain motion/IoU match, so it doubles as a reliable record of *which*
+        mechanism actually resolved this match - the lost state a track
+        happened to be in (LOST_KALMAN vs LOST_GALLERY) is not a reliable
+        proxy for that, since a LOST_KALMAN track can also be recovered via
+        the ReID fallback.
+        """
         if snap_kalman:
             self.kalman.reset(bbox_xyxy)
         else:
             self.kalman.update(bbox_xyxy)
 
         self.last_bbox = bbox_xyxy
-        self.last_confidence = confidence
         self.last_keypoints = keypoints
+        self.last_match_via_reid = snap_kalman
         self.seconds_since_last_seen = 0.0
-        self.update_gallery(embedding, quality)
+        self.update_gallery(embedding, quality, torso_embedding)
 
         if self.state == NEW:
             self.consecutive_hits += 1
