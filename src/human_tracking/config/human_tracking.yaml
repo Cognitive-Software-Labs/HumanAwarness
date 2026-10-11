@@ -15,3 +15,5 @@ human_tracking_node:
     kalman_timeout_s: 2.5
     gallery_timeout_s: 45.0
     reconcile_window_s: 1.5
+    density_threshold_step: 0.05
+    density_margin_step: 0.05

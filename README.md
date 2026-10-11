@@ -183,6 +183,11 @@ visible again) instead of permanently splitting into two identities. See
 `docs/context/human_tracking.md` for what was actually tested (including
 real phone-recorded footage) and the known tradeoffs — in particular, the
 default `--reid-threshold` was lowered from an initially more
-conservative value after real testing, and neither that change nor the
-reconciliation stage has been re-validated against the crowded-scene
-false-positive case documented there.
+conservative value after real testing, and that threshold choice plus the
+reconciliation stage were both re-tested against a real crowded scene and
+**confirmed to produce real false merges between different people** -
+`--density-threshold-step`/`--density-margin-step` (raise the bar when
+several people are simultaneously plausible candidates) are there as a
+partial, no-regression mitigation, but testing found they don't fully fix
+it - see `docs/context/human_tracking.md` for exactly why, and don't trust
+this in a scene where several similarly-dressed people are likely.

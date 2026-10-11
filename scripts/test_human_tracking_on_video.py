@@ -78,6 +78,19 @@ def main():
         help="seconds after a track's creation during which it can still lose its detection "
         "to an older lost identity via ReID (see tracker.py's module docstring)",
     )
+    parser.add_argument(
+        "--density-threshold-step",
+        type=float,
+        default=0.05,
+        help="extra reid_threshold required per additional simultaneous spatial contender "
+        "(density gating - see tracker.py's _find_reid_matches docstring)",
+    )
+    parser.add_argument(
+        "--density-margin-step",
+        type=float,
+        default=0.05,
+        help="extra reid_margin required per additional simultaneous spatial contender",
+    )
     parser.add_argument("--output-dir", default="test_output")
     parser.add_argument(
         "--blackout",
@@ -115,6 +128,8 @@ def main():
         kalman_timeout_s=args.kalman_timeout,
         gallery_timeout_s=args.gallery_timeout,
         reconcile_window_s=args.reconcile_window,
+        density_threshold_step=args.density_threshold_step,
+        density_margin_step=args.density_margin_step,
     )
 
     cap = cv2.VideoCapture(str(video_path))

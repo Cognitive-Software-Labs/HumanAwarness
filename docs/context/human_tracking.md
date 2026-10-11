@@ -148,6 +148,8 @@ within that window.
 | `max_speed_bbox_heights_per_sec` | 3.0 | spatial gate speed limit, in bbox-heights/sec |
 | `gallery_size` | 8 | embeddings kept per track |
 | `reconcile_window_s` | 1.5 | how long a new/young track can still lose its detection to an older identity via ReID |
+| `density_threshold_step` | 0.05 | extra `reid_threshold` required per additional simultaneous spatial contender |
+| `density_margin_step` | 0.05 | extra `reid_margin` required per additional simultaneous spatial contender |
 
 ### `reid_threshold`: the real tradeoff, found empirically
 
@@ -169,14 +171,52 @@ within that window.
   real test clip (1 person, 1 identity throughout, instead of splitting
   into 2) without breaking either clean synthetic/controlled test case
   re-checked at that threshold.
-- **This default has not been re-validated against the crowded-scene
-  false-positive case at 0.65** (only checked at 0.75, where it already
-  showed real false merges). A lower threshold gives weaker evidence more
-  benefit of the doubt, which plausibly makes a crowded scene *worse*,
-  not better. For a single-or-few-person robot-awareness scenario
-  (the actual target use case) this tradeoff favors recall; it may need
-  to be raised again, or made context-dependent, before trusting it
-  anywhere a crowd is plausible.
+- **Re-validated at 0.65 against a real crowded scene - confirmed worse,
+  not just theoretically risky.** Re-ran the same Shibuya-crossing-style
+  footage used for the original 0.75 finding above. Result: 5 of 6
+  reconciliation merges were real false merges between different people
+  (visually confirmed via the actual crop images - different clothing,
+  different people, not an edge case), collapsing into a single "magnet"
+  identity whose gallery got progressively more contaminated as it
+  absorbed more unrelated people - a compounding failure, not an
+  independent one, since a contaminated gallery's `best_similarity` (a
+  max over all entries) only gets easier to clear over time.
+- **Two mitigations tried, both failed, for instructive reasons** (see
+  `density_threshold_step`/`density_margin_step` below for what shipped
+  anyway):
+  1. *Density gating* (raise the effective threshold/margin when several
+     spatially-plausible candidates compete for the same match): checked
+     every one of the 6 false merges and found essentially none of them
+     involved real competition - there was almost always exactly one
+     above-threshold candidate at the moment of the wrong match. The
+     failure mode is a single confident-looking-but-wrong match, not
+     several candidates confusing the margin check, so gating on
+     candidate *count* doesn't touch the actual problem. Kept anyway as a
+     free, no-regression partial safety net (it's a no-op whenever there's
+     only one plausible candidate, which covers every single/few-person
+     case tested).
+  2. *Self-similarity baseline* (require a reclaim to beat the young
+     track's own gallery similarity to the same detection, not just beat
+     other lost tracks): tried and reverted after it broke the main
+     correct recovery case from real footage. The reason is structural,
+     not a tuning miss - a track's own gallery is built from consecutive,
+     highly-correlated frames of itself (measured self-similarity ~0.95-1.0
+     once it has more than a couple of entries), while even a *correct*
+     cross-session reappearance match (the whole point of reconciliation)
+     tops out around 0.85-0.87 in real footage, because real appearance
+     naturally drifts between separate sightings (pose, lighting, motion
+     blur). Comparing those two numbers head-to-head isn't comparing two
+     candidate identities fairly - it's comparing "how similar are two
+     frames taken a thirtieth of a second apart" against "how similar are
+     two frames taken 10 seconds apart," which is never a fair fight. No
+     margin value fixes this; the comparison itself doesn't work.
+- **Net effect**: for a single-or-few-person robot-awareness scenario
+  (the actual target use case) the 0.65 threshold's recall tradeoff is
+  still justified and both mitigations are harmless (no regression on any
+  tested clip). But the crowd-scene risk itself remains real and
+  unresolved - neither attempted fix closed it, and it should not be
+  trusted anywhere a crowd of several similarly-dressed people is
+  plausible (see "Not done yet").
 
 ## ROS2 integration (`human_tracking_node`)
 
@@ -213,11 +253,14 @@ within that window.
 
 ## Not done yet
 
-- `reid_threshold=0.65`, and the reconciliation stage, not re-validated
-  against the crowded-scene false-positive case (see above) - likely
-  needs revisiting once there's a concrete multi-person test scenario
-  that matters for the real deployment (not just the extreme crowd
-  stress-test). This is the one known gap from before that's still open.
+- **Crowd-scene false merges are confirmed real, not just theoretical, and
+  still unresolved** (see above) - two mitigations were tried and both
+  failed for instructive, structural reasons (not tuning misses), so this
+  needs either a different approach entirely (e.g. a part-based ReID model
+  trained for multi-person discrimination, or simply refusing to run ReID/
+  reconciliation at all above some simultaneous-person count) or an
+  explicit decision to only deploy where a crowd is implausible (the
+  actual target use case: a robot seeing one or a few people at a time).
 - The ROS2 node has not been tested against a live camera topic (same
   `/dev/video0` permissions blocker noted in `docs/context/bbox_keypoints.md`
   applies here too) or against `human_perception`'s node actually running

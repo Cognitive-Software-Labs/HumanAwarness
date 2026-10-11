@@ -72,6 +72,8 @@ class HumanTrackingNode(Node):
         self.declare_parameter("kalman_timeout_s", 2.5)
         self.declare_parameter("gallery_timeout_s", 45.0)
         self.declare_parameter("reconcile_window_s", 1.5)
+        self.declare_parameter("density_threshold_step", 0.05)
+        self.declare_parameter("density_margin_step", 0.05)
 
         image_topic = self.get_parameter("image_topic").value
         detections_topic = self.get_parameter("detections_topic").value
@@ -93,6 +95,8 @@ class HumanTrackingNode(Node):
             kalman_timeout_s=self.get_parameter("kalman_timeout_s").value,
             gallery_timeout_s=self.get_parameter("gallery_timeout_s").value,
             reconcile_window_s=self.get_parameter("reconcile_window_s").value,
+            density_threshold_step=self.get_parameter("density_threshold_step").value,
+            density_margin_step=self.get_parameter("density_margin_step").value,
         )
 
         self.bridge = CvBridge()

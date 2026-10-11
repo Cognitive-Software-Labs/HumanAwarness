@@ -58,14 +58,31 @@ def _find_reid_matches(
     reid_margin: float,
     dt_seconds: float,
     excluded_pool_idx: frozenset[int] = frozenset(),
+    density_threshold_step: float = 0.0,
+    density_margin_step: float = 0.0,
 ) -> dict[int, int]:
     """Greedily match `lost_pool` tracks against `candidates` by appearance
     similarity, gated by a spatial plausibility check (see module docstring)
     and resolved with a similarity margin against the runner-up on either
     side. Each candidate is `(key, center_xy, embedding, torso_embedding)`.
     Returns `{lost_pool_index: candidate_key}` for accepted matches.
+
+    Density gating: a track/candidate pair's required threshold and margin
+    both scale up with how many *other* spatially-plausible pairings exist
+    for either side (`density_threshold_step`/`density_margin_step` per
+    extra contender) - with exactly one plausible pairing on both sides
+    (the common single/few-person case), this has no effect at all.
+    Real-footage testing found this does NOT fully address false merges in
+    a dense crowd (docs/context/human_tracking.md): the false merges found
+    there mostly had only one real above-threshold contender at the moment
+    of the match, not several competing - the failure mode was a single
+    confident-looking but wrong match, which no amount of competition-aware
+    gating catches. Kept as a real, if partial, mitigation regardless.
     """
-    pairs = []
+    # Pass 1: every spatially-plausible pairing, regardless of similarity -
+    # this defines "how many bodies could plausibly be this person" (local
+    # density) independent of what the appearance model happens to say.
+    spatial_pairs = []  # (ti, key, sim)
     for ti, t in enumerate(lost_pool):
         if ti in excluded_pool_idx:
             continue
@@ -78,15 +95,28 @@ def _find_reid_matches(
             dist = ((track_center[0] - center[0]) ** 2 + (track_center[1] - center[1]) ** 2) ** 0.5
             if dist > max_dist:
                 continue  # spatial gate: too far to plausibly be the same person
-            sim = t.best_similarity(emb, temb)
-            if sim >= reid_threshold:
-                pairs.append((sim, ti, key))
+            spatial_pairs.append((ti, key, t.best_similarity(emb, temb)))
+
+    contenders_per_track: dict[int, int] = {}
+    contenders_per_key: dict[int, int] = {}
+    for ti, key, _sim in spatial_pairs:
+        contenders_per_track[ti] = contenders_per_track.get(ti, 0) + 1
+        contenders_per_key[key] = contenders_per_key.get(key, 0) + 1
+
+    # Pass 2: apply the (possibly density-raised) threshold.
+    pairs = []  # (sim, ti, key, margin_for_this_pair)
+    for ti, key, sim in spatial_pairs:
+        extra_contenders = max(contenders_per_track[ti], contenders_per_key[key]) - 1
+        eff_threshold = reid_threshold + density_threshold_step * extra_contenders
+        eff_margin = reid_margin + density_margin_step * extra_contenders
+        if sim >= eff_threshold:
+            pairs.append((sim, ti, key, eff_margin))
     pairs.sort(key=lambda p: p[0], reverse=True)
 
     matches: dict[int, int] = {}
     resolved_tracks: set[int] = set()
     resolved_keys: set[int] = set()
-    for pi, (sim, ti, key) in enumerate(pairs):
+    for pi, (sim, ti, key, eff_margin) in enumerate(pairs):
         if ti in resolved_tracks or key in resolved_keys:
             continue
         # similarity margin: only accept if this candidate clearly beats whatever
@@ -95,14 +125,14 @@ def _find_reid_matches(
         runner_up = max(
             (
                 s2
-                for s2, t2, k2 in pairs[pi + 1 :]
+                for s2, t2, k2, _m2 in pairs[pi + 1 :]
                 if (t2 == ti or k2 == key) and t2 not in resolved_tracks and k2 not in resolved_keys
             ),
             default=None,
         )
         resolved_tracks.add(ti)
         resolved_keys.add(key)
-        if runner_up is not None and (sim - runner_up) < reid_margin:
+        if runner_up is not None and (sim - runner_up) < eff_margin:
             continue
         matches[ti] = key
     return matches
@@ -150,6 +180,8 @@ class Tracker:
         kalman_timeout_s: float = 2.5,
         gallery_timeout_s: float = 45.0,
         reconcile_window_s: float = 1.5,
+        density_threshold_step: float = 0.05,
+        density_margin_step: float = 0.05,
     ):
         self.tracks: list[Track] = []
         self.gallery_size = gallery_size
@@ -161,6 +193,8 @@ class Tracker:
         self.kalman_timeout_s = kalman_timeout_s
         self.gallery_timeout_s = gallery_timeout_s
         self.reconcile_window_s = reconcile_window_s
+        self.density_threshold_step = density_threshold_step
+        self.density_margin_step = density_margin_step
         # {abandoned_track_id: surviving_track_id} for every reconciliation
         # merge so far - a caller that already published `abandoned_track_id`
         # knows it was retroactively superseded, not actually a separate person.
@@ -247,6 +281,8 @@ class Tracker:
             self.reid_threshold,
             self.reid_margin,
             dt_seconds,
+            density_threshold_step=self.density_threshold_step,
+            density_margin_step=self.density_margin_step,
         )
         reconciled_young_tracks: set[Track] = set()
         for lost_ti, young_ti in reconcile_matches.items():
@@ -282,6 +318,8 @@ class Tracker:
             self.reid_margin,
             dt_seconds,
             excluded_pool_idx=frozenset(reconcile_matches.keys()),
+            density_threshold_step=self.density_threshold_step,
+            density_margin_step=self.density_margin_step,
         )
         for ti, ui in reid_matches.items():
             di, d = unmatched_detections[ui]
