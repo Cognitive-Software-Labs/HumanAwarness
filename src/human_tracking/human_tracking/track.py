@@ -20,6 +20,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from human_tracking.kalman_box_tracker import KalmanBoxTracker
+from human_tracking.orientation import UNKNOWN as ORIENTATION_UNKNOWN
+from human_tracking.orientation import orientation_mismatch_relief
 
 NEW = "NEW"
 ACTIVE = "ACTIVE"
@@ -33,6 +35,7 @@ class GalleryEntry:
     embedding: np.ndarray
     quality: float
     torso_embedding: np.ndarray | None = None
+    orientation: str = ORIENTATION_UNKNOWN
 
 
 # COCO-17 indices for shoulders/hips - the torso region used by torso_crop_bbox.
@@ -158,18 +161,28 @@ class Track:
         return new_id
 
     def update_gallery(
-        self, embedding: np.ndarray | None, quality: float, torso_embedding: np.ndarray | None = None
+        self,
+        embedding: np.ndarray | None,
+        quality: float,
+        torso_embedding: np.ndarray | None = None,
+        orientation: str = ORIENTATION_UNKNOWN,
     ) -> None:
         if embedding is None:
             return
         if len(self.gallery) < self.gallery_size:
-            self.gallery.append(GalleryEntry(embedding, quality, torso_embedding))
+            self.gallery.append(GalleryEntry(embedding, quality, torso_embedding, orientation))
             return
         worst_idx = min(range(len(self.gallery)), key=lambda i: self.gallery[i].quality)
         if quality > self.gallery[worst_idx].quality:
-            self.gallery[worst_idx] = GalleryEntry(embedding, quality, torso_embedding)
+            self.gallery[worst_idx] = GalleryEntry(embedding, quality, torso_embedding, orientation)
 
-    def best_similarity(self, embedding: np.ndarray, torso_embedding: np.ndarray | None = None) -> float:
+    def best_similarity(
+        self,
+        embedding: np.ndarray,
+        torso_embedding: np.ndarray | None = None,
+        query_orientation: str = ORIENTATION_UNKNOWN,
+        orientation_relief: float = 0.0,
+    ) -> float:
         """Max cosine similarity between the query and anything in this track's
         gallery - compared on the full-crop embedding, and also on the
         torso-only embedding when both sides have one (see torso_crop_bbox).
@@ -178,18 +191,23 @@ class Track:
         match a partial/edge-clipped reappearance: their full-crop embeddings
         describe different amounts of visible body and are poorly comparable,
         but their torso embeddings describe the same region on both sides.
+
+        `orientation_relief` adds a per-entry similarity bonus (see
+        human_tracking.orientation) when the query and that specific gallery
+        entry have confidently-known, different orientations (e.g. one
+        FRONTAL, one BACK) - a targeted correction for OSNet's known
+        viewpoint sensitivity, applied only where there's direct evidence for
+        it rather than as a blanket threshold drop.
         """
         if not self.gallery:
             return -1.0
-        best = max(float(np.dot(embedding, entry.embedding)) for entry in self.gallery)
-        if torso_embedding is not None:
-            torso_sims = [
-                float(np.dot(torso_embedding, entry.torso_embedding))
-                for entry in self.gallery
-                if entry.torso_embedding is not None
-            ]
-            if torso_sims:
-                best = max(best, max(torso_sims))
+        best = -1.0
+        for entry in self.gallery:
+            sim = float(np.dot(embedding, entry.embedding))
+            if torso_embedding is not None and entry.torso_embedding is not None:
+                sim = max(sim, float(np.dot(torso_embedding, entry.torso_embedding)))
+            sim += orientation_mismatch_relief(query_orientation, entry.orientation, orientation_relief)
+            best = max(best, sim)
         return best
 
     def mark_matched(
@@ -201,6 +219,7 @@ class Track:
         quality: float,
         confirm_frames: int,
         torso_embedding: np.ndarray | None = None,
+        orientation: str = ORIENTATION_UNKNOWN,
         snap_kalman: bool = False,
     ) -> None:
         """Record a successful match (direct motion/IoU match or ReID re-acquisition).
@@ -223,7 +242,7 @@ class Track:
         self.last_keypoints = keypoints
         self.last_match_via_reid = snap_kalman
         self.seconds_since_last_seen = 0.0
-        self.update_gallery(embedding, quality, torso_embedding)
+        self.update_gallery(embedding, quality, torso_embedding, orientation)
 
         if self.state == NEW:
             self.consecutive_hits += 1

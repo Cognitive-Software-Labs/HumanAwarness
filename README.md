@@ -11,9 +11,10 @@ See `CLAUDE.md` for a running index of what's been built, and
 - **bbox + keypoints detection** — monocular RGB person detection (bbox +
   COCO-17 keypoints) via YOLO26-pose. See `docs/context/bbox_keypoints.md`.
 - **human tracking / ReID** — persistent identity across brief occlusion
-  or leaving/re-entering frame (Kalman motion + OSNet appearance
-  matching), wired into a ROS2 node (`human_tracking_node`). See
-  `docs/context/human_tracking.md`.
+  or leaving/re-entering frame (Kalman motion + OSNet appearance matching,
+  fused with a keypoint-derived body-orientation signal so a reappearance
+  at a different facing direction isn't missed), wired into a ROS2 node
+  (`human_tracking_node`). See `docs/context/human_tracking.md`.
 
 ## Setup
 

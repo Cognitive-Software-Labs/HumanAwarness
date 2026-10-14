@@ -91,6 +91,14 @@ def main():
         default=0.05,
         help="extra reid_margin required per additional simultaneous spatial contender",
     )
+    parser.add_argument(
+        "--orientation-relief",
+        type=float,
+        default=0.12,
+        help="similarity bonus granted to a ReID comparison when the query and gallery sample have "
+        "confidently-known, different keypoint-derived orientations (e.g. FRONTAL vs BACK) - see "
+        "human_tracking/orientation.py",
+    )
     parser.add_argument("--output-dir", default="test_output")
     parser.add_argument(
         "--blackout",
@@ -130,6 +138,7 @@ def main():
         reconcile_window_s=args.reconcile_window,
         density_threshold_step=args.density_threshold_step,
         density_margin_step=args.density_margin_step,
+        orientation_relief=args.orientation_relief,
     )
 
     cap = cv2.VideoCapture(str(video_path))

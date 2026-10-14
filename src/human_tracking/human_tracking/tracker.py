@@ -41,18 +41,33 @@ has the real case this fixes). When reconciliation accepts a match, the
 young track's identity is discarded and the older, reclaimed identity
 takes over its position - so a track_id a caller already saw published
 can be superseded by an older one within the grace window.
+
+Both appearance-matching stages (2 and the reconciliation stage above) fuse
+OSNet similarity with a keypoint-derived orientation signal (see
+human_tracking.orientation): a track/candidate pair with confidently-known,
+different orientations (e.g. a gallery sample that was FRONTAL vs. a
+reappearance that's BACK) gets a small similarity bonus before the
+threshold/margin check, since OSNet's own score is known to understate a
+genuine same-person match across a real viewpoint flip. This is additive
+and only fires with direct per-pair evidence, not a blanket threshold
+change - unlike the earlier bare-threshold-lowering experiment
+(docs/context/human_tracking.md), it shouldn't by itself make unrelated
+same-orientation candidates (the actual crowd-scene false-merge failure
+mode) any easier to match.
 """
 
 from dataclasses import dataclass
 
 import numpy as np
 
+from human_tracking.orientation import UNKNOWN as ORIENTATION_UNKNOWN
+from human_tracking.orientation import estimate_orientation
 from human_tracking.track import ACTIVE, LOST_GALLERY, LOST_KALMAN, NEW, Track, crop_quality, is_plausible_person_crop
 
 
 def _find_reid_matches(
     lost_pool: list[Track],
-    candidates: list[tuple[int, tuple[float, float], np.ndarray | None, np.ndarray | None]],
+    candidates: list[tuple[int, tuple[float, float], np.ndarray | None, np.ndarray | None, str]],
     max_speed_bbox_heights_per_sec: float,
     reid_threshold: float,
     reid_margin: float,
@@ -60,11 +75,13 @@ def _find_reid_matches(
     excluded_pool_idx: frozenset[int] = frozenset(),
     density_threshold_step: float = 0.0,
     density_margin_step: float = 0.0,
+    orientation_relief: float = 0.0,
 ) -> dict[int, int]:
     """Greedily match `lost_pool` tracks against `candidates` by appearance
     similarity, gated by a spatial plausibility check (see module docstring)
     and resolved with a similarity margin against the runner-up on either
-    side. Each candidate is `(key, center_xy, embedding, torso_embedding)`.
+    side. Each candidate is
+    `(key, center_xy, embedding, torso_embedding, orientation)`.
     Returns `{lost_pool_index: candidate_key}` for accepted matches.
 
     Density gating: a track/candidate pair's required threshold and margin
@@ -89,13 +106,14 @@ def _find_reid_matches(
         track_center = _bbox_center(t.last_bbox)
         track_scale = _bbox_height(t.last_bbox)
         max_dist = max_speed_bbox_heights_per_sec * track_scale * max(t.seconds_since_last_seen, dt_seconds)
-        for key, center, emb, temb in candidates:
+        for key, center, emb, temb, orientation in candidates:
             if emb is None:
                 continue
             dist = ((track_center[0] - center[0]) ** 2 + (track_center[1] - center[1]) ** 2) ** 0.5
             if dist > max_dist:
                 continue  # spatial gate: too far to plausibly be the same person
-            spatial_pairs.append((ti, key, t.best_similarity(emb, temb)))
+            sim = t.best_similarity(emb, temb, query_orientation=orientation, orientation_relief=orientation_relief)
+            spatial_pairs.append((ti, key, sim))
 
     contenders_per_track: dict[int, int] = {}
     contenders_per_key: dict[int, int] = {}
@@ -182,6 +200,7 @@ class Tracker:
         reconcile_window_s: float = 1.5,
         density_threshold_step: float = 0.05,
         density_margin_step: float = 0.05,
+        orientation_relief: float = 0.12,
     ):
         self.tracks: list[Track] = []
         self.gallery_size = gallery_size
@@ -195,6 +214,7 @@ class Tracker:
         self.reconcile_window_s = reconcile_window_s
         self.density_threshold_step = density_threshold_step
         self.density_margin_step = density_margin_step
+        self.orientation_relief = orientation_relief
         # {abandoned_track_id: surviving_track_id} for every reconciliation
         # merge so far - a caller that already published `abandoned_track_id`
         # knows it was retroactively superseded, not actually a separate person.
@@ -220,6 +240,11 @@ class Tracker:
         gated_torso_embeddings: list[np.ndarray | None] = [
             d.torso_embedding if (d.torso_embedding is not None and p) else None
             for d, p in zip(detections, plausible)
+        ]
+        # Same gating: an orientation read off a crop too degraded to trust
+        # for ReID at all isn't trustworthy either - UNKNOWN grants no relief.
+        orientations: list[str] = [
+            estimate_orientation(d.keypoints) if p else ORIENTATION_UNKNOWN for d, p in zip(detections, plausible)
         ]
 
         for t in motion_tracks:
@@ -253,6 +278,7 @@ class Tracker:
                 quality,
                 self.confirm_frames,
                 torso_embedding=gated_torso_embeddings[di],
+                orientation=orientations[di],
             )
 
         unmatched_detections = [(di, d) for di, d in enumerate(detections) if di not in matched_det_idx]
@@ -270,7 +296,13 @@ class Tracker:
         # window a chance to lose its detection to an older lost identity
         # instead - see module docstring for why this matters in practice.
         reconcile_candidates = [
-            (ti, _bbox_center(motion_tracks[ti].last_bbox), gated_embeddings[di], gated_torso_embeddings[di])
+            (
+                ti,
+                _bbox_center(motion_tracks[ti].last_bbox),
+                gated_embeddings[di],
+                gated_torso_embeddings[di],
+                orientations[di],
+            )
             for ti, di in track_to_det.items()
             if motion_tracks[ti].age_seconds <= self.reconcile_window_s
         ]
@@ -283,6 +315,7 @@ class Tracker:
             dt_seconds,
             density_threshold_step=self.density_threshold_step,
             density_margin_step=self.density_margin_step,
+            orientation_relief=self.orientation_relief,
         )
         reconciled_young_tracks: set[Track] = set()
         for lost_ti, young_ti in reconcile_matches.items():
@@ -299,6 +332,7 @@ class Tracker:
                 quality,
                 self.confirm_frames,
                 torso_embedding=gated_torso_embeddings[di],
+                orientation=orientations[di],
                 snap_kalman=True,
             )
             if young_track.track_id is not None:
@@ -307,7 +341,7 @@ class Tracker:
 
         # --- stage 2: ReID matching for whatever's left truly unmatched ---
         det_candidates = [
-            (ui, _bbox_center(d.bbox_xyxy), gated_embeddings[di], gated_torso_embeddings[di])
+            (ui, _bbox_center(d.bbox_xyxy), gated_embeddings[di], gated_torso_embeddings[di], orientations[di])
             for ui, (di, d) in enumerate(unmatched_detections)
         ]
         reid_matches = _find_reid_matches(
@@ -320,6 +354,7 @@ class Tracker:
             excluded_pool_idx=frozenset(reconcile_matches.keys()),
             density_threshold_step=self.density_threshold_step,
             density_margin_step=self.density_margin_step,
+            orientation_relief=self.orientation_relief,
         )
         for ti, ui in reid_matches.items():
             di, d = unmatched_detections[ui]
@@ -332,6 +367,7 @@ class Tracker:
                 quality,
                 self.confirm_frames,
                 torso_embedding=gated_torso_embeddings[di],
+                orientation=orientations[di],
                 snap_kalman=True,
             )
 
@@ -359,6 +395,7 @@ class Tracker:
                 quality,
                 self.confirm_frames,
                 torso_embedding=gated_torso_embeddings[di],
+                orientation=orientations[di],
             )
             self.tracks.append(new_track)
 

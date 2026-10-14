@@ -113,6 +113,36 @@ within that window.
   pose model itself can't place shoulder/hip keypoints on the reappearance
   crop at all (confirmed on a real case - see Reconciliation below), since
   there's then no torso region to extract on that side either.
+- **Keypoint-based orientation fusion** (`orientation.py`, used in
+  `Track.best_similarity`): a real reappearance after 1-2s away often comes
+  back at a different body orientation than it left in (e.g. walked off
+  facing the camera, walked back in with their back to it) - OSNet was
+  never trained to make its embedding viewpoint-*invariant*, so a genuine
+  same-person match across that flip can legitimately score well below
+  `reid_threshold`, which looks identical to "different person" to a bare
+  threshold. Considered (and rejected) **6DRepNet-style head pose** for this
+  first: it needs a detected face to run at all, so it has nothing to say
+  exactly when the face isn't visible - the back-of-head case that's
+  actually failing. Used instead: a classifier over the same COCO-17
+  keypoints already available (`estimate_orientation` - FRONTAL if the face
+  is actually visible, BACK if only the back-of-head/ear keypoints are,
+  PROFILE for one eye/ear, UNKNOWN otherwise), no new model/dependency, and
+  it still produces an answer in the no-face case. When a query and a
+  specific gallery entry have confidently-known, *different* orientations,
+  that one comparison gets a similarity bonus (`orientation_relief`, scaled
+  down for a partial PROFILE mismatch vs. a full FRONTAL/BACK flip) before
+  the threshold/margin check - additive, per-pair, and zero whenever either
+  side is UNKNOWN or they match, specifically so it doesn't repeat the
+  earlier bare-threshold-lowering mistake (see `reid_threshold` section
+  below) of making unrelated same-orientation candidates easier to match
+  too. Synthetic validation (`Tracker` exercised directly, no real footage
+  available - see "Not done yet"): a controlled cross-orientation
+  reappearance at a similarity the plain threshold rejects is correctly
+  reclaimed with the relief enabled and correctly still lost without it;
+  the same setup with a second, spatially-plausible same-orientation
+  distractor track correctly still picks the right identity, not the
+  distractor, confirming the relief doesn't erode the margin-based
+  disambiguation that's keeping crowd scenes from collapsing.
 - **Reconciliation stage** (`Tracker.update`'s "stage 1.5"): a real
   phone-recorded exit/re-entry test showed that a person's first
   reappearance frame can have keypoints too degraded for ReID to
@@ -150,6 +180,7 @@ within that window.
 | `reconcile_window_s` | 1.5 | how long a new/young track can still lose its detection to an older identity via ReID |
 | `density_threshold_step` | 0.05 | extra `reid_threshold` required per additional simultaneous spatial contender |
 | `density_margin_step` | 0.05 | extra `reid_margin` required per additional simultaneous spatial contender |
+| `orientation_relief` | 0.12 | similarity bonus for a ReID comparison where query and gallery sample have confidently-known, different keypoint-derived orientations (scaled down for a partial PROFILE mismatch - see "Design decisions") |
 
 ### `reid_threshold`: the real tradeoff, found empirically
 
@@ -253,6 +284,21 @@ within that window.
 
 ## Not done yet
 
+- **Orientation fusion is only synthetically validated so far** - no real
+  footage of a person leaving and reappearing at a different body
+  orientation was available to test against (prior test clips were
+  deleted, see below). The synthetic checks (direct `Tracker` calls with
+  constructed-similarity embeddings) confirm the mechanism does what it's
+  designed to - rescue a genuine cross-orientation match that the plain
+  threshold would miss, without eroding margin-based disambiguation
+  against a same-orientation distractor - but real OSNet embeddings on
+  real footage could behave differently (e.g. if front/back similarity
+  for the *same* person is more or less separated from different-person
+  similarity than assumed here). Should be re-validated the same way the
+  reconciliation stage and `reid_threshold` were: real phone-recorded
+  exit/re-entry clips, ideally with a deliberate orientation change on
+  reappearance, plus a re-check against the crowd-scene footage for new
+  false merges.
 - **Crowd-scene false merges are confirmed real, not just theoretical, and
   still unresolved** (see above) - two mitigations were tried and both
   failed for instructive, structural reasons (not tuning misses), so this

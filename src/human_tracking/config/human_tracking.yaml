@@ -17,3 +17,4 @@ human_tracking_node:
     reconcile_window_s: 1.5
     density_threshold_step: 0.05
     density_margin_step: 0.05
+    orientation_relief: 0.12

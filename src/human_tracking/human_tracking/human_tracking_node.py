@@ -74,6 +74,7 @@ class HumanTrackingNode(Node):
         self.declare_parameter("reconcile_window_s", 1.5)
         self.declare_parameter("density_threshold_step", 0.05)
         self.declare_parameter("density_margin_step", 0.05)
+        self.declare_parameter("orientation_relief", 0.12)
 
         image_topic = self.get_parameter("image_topic").value
         detections_topic = self.get_parameter("detections_topic").value
@@ -97,6 +98,7 @@ class HumanTrackingNode(Node):
             reconcile_window_s=self.get_parameter("reconcile_window_s").value,
             density_threshold_step=self.get_parameter("density_threshold_step").value,
             density_margin_step=self.get_parameter("density_margin_step").value,
+            orientation_relief=self.get_parameter("orientation_relief").value,
         )
 
         self.bridge = CvBridge()
