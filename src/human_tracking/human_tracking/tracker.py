@@ -27,6 +27,24 @@ scene):
   beats whatever else that track or detection could instead match to -
   an ambiguous near-tie is left unmatched rather than guessed at.
 
+A directional variant of the spatial gate (reject a candidate behind
+where the track's Kalman velocity was heading when lost) was tried as a
+hard veto on a single candidate and reverted - see
+docs/context/human_tracking.md. It fixed a confirmed real false merge
+(two different people, one exiting left, another appearing from the
+right) but broke an already-validated single-person clip where the same
+person simply turned around and walked back the way they came - a real,
+common reappearance pattern that looks directionally identical (cosine
+~-0.9 to -1.0 against the old heading either way) to the false-merge case
+it was meant to catch; no pure heading-based signal separated the two as
+an absolute judgment on one candidate. It came back in a narrower form,
+in the reconciliation stage below: heading (and keypoint-derived
+orientation) as a *ranking* tie-breaker between two already
+appearance-qualified candidates competing for the same reappearance -
+never as a veto on a lone candidate - since the real false-merge case
+that found it had exactly that shape (two different people's lost tracks
+both spatially and appearance plausible for the same detection at once).
+
 A third stage, reconciliation, runs right after stage 1: a just-created
 (or just-reconfirmed) track is still allowed to lose its detection to an
 older lost identity via ReID, for a short grace window after its own
@@ -65,6 +83,9 @@ from human_tracking.orientation import estimate_orientation
 from human_tracking.track import ACTIVE, LOST_GALLERY, LOST_KALMAN, NEW, Track, crop_quality, is_plausible_person_crop
 
 
+_MIN_CONFIDENT_HEADING_SPEED_FRAC = 0.002  # bbox-heights/frame below which a track's last heading is too noisy to trust
+
+
 def _find_reid_matches(
     lost_pool: list[Track],
     candidates: list[tuple[int, tuple[float, float], np.ndarray | None, np.ndarray | None, str]],
@@ -76,6 +97,9 @@ def _find_reid_matches(
     density_threshold_step: float = 0.0,
     density_margin_step: float = 0.0,
     orientation_relief: float = 0.0,
+    torso_rescue_weight: float = 0.4,
+    heading_rank_weight: float = 0.0,
+    orientation_rank_weight: float = 0.0,
 ) -> dict[int, int]:
     """Greedily match `lost_pool` tracks against `candidates` by appearance
     similarity, gated by a spatial plausibility check (see module docstring)
@@ -95,40 +119,101 @@ def _find_reid_matches(
     of the match, not several competing - the failure mode was a single
     confident-looking but wrong match, which no amount of competition-aware
     gating catches. Kept as a real, if partial, mitigation regardless.
+
+    `heading_rank_weight`/`orientation_rank_weight`: two more signals -
+    where a lost track's Kalman velocity says it was headed, and its
+    keypoint-derived body orientation - but applied *only* to ranking among
+    candidates that already qualify on appearance alone, never to whether a
+    candidate qualifies in the first place (`qualify_sim` below is always
+    appearance-only). A hard reject on heading was tried first and reverted
+    (docs/context/human_tracking.md): a real person simply turning around
+    and walking back produces the same "candidate is behind my last
+    heading" signature as two different people arriving from opposite
+    directions, so it can't be used as an absolute veto on a single
+    candidate. It's a real signal, though, for deciding *between* two
+    already-qualified candidates competing for the same detection - which
+    is the case that was actually found in real footage: two different
+    people's lost tracks both spatially and appearance-plausible for the
+    same reappearance, correctly resolved by preferring whichever one the
+    candidate is actually arriving from the direction of.
     """
     # Pass 1: every spatially-plausible pairing, regardless of similarity -
     # this defines "how many bodies could plausibly be this person" (local
     # density) independent of what the appearance model happens to say.
-    spatial_pairs = []  # (ti, key, sim)
+    spatial_pairs = []  # (ti, key, qualify_sim, rank_sim)
     for ti, t in enumerate(lost_pool):
         if ti in excluded_pool_idx:
+            continue
+        if not t.gallery:
+            # Can never produce a match (best_similarity returns -1.0
+            # unconditionally for an empty gallery) - excluded before the
+            # spatial gate, not just the similarity threshold, so it also
+            # doesn't inflate the density/contenders count below. A real
+            # case found this mattering: an unrelated empty-gallery track
+            # that was merely spatially nearby was being counted as a
+            # "contender," raising the effective threshold enough that a
+            # genuine reappearance's own original track never requalified
+            # for its own person - see docs/context/human_tracking.md.
             continue
         track_center = _bbox_center(t.last_bbox)
         track_scale = _bbox_height(t.last_bbox)
         max_dist = max_speed_bbox_heights_per_sec * track_scale * max(t.seconds_since_last_seen, dt_seconds)
+        # Kalman state is [cx, cy, w, h, vcx, vcy, vw, vh] - velocity stays
+        # frozen at whatever it was at the last real detection through pure
+        # predict() calls (no measurement to update it with), so this is the
+        # track's heading at the moment it was lost, not a stale/drifted value.
+        vcx, vcy = t.kalman.x[4], t.kalman.x[5]
+        heading_speed = (vcx**2 + vcy**2) ** 0.5
+        has_confident_heading = heading_speed >= _MIN_CONFIDENT_HEADING_SPEED_FRAC * track_scale
         for key, center, emb, temb, orientation in candidates:
             if emb is None:
                 continue
-            dist = ((track_center[0] - center[0]) ** 2 + (track_center[1] - center[1]) ** 2) ** 0.5
+            dx, dy = center[0] - track_center[0], center[1] - track_center[1]
+            dist = (dx**2 + dy**2) ** 0.5
             if dist > max_dist:
                 continue  # spatial gate: too far to plausibly be the same person
-            sim = t.best_similarity(emb, temb, query_orientation=orientation, orientation_relief=orientation_relief)
-            spatial_pairs.append((ti, key, sim))
+            qualify_sim = t.best_similarity(
+                emb,
+                temb,
+                query_orientation=orientation,
+                orientation_relief=orientation_relief,
+                torso_rescue_weight=torso_rescue_weight,
+            )
+            rank_sim = qualify_sim
+            if orientation_rank_weight:
+                # Reuses best_similarity's own orientation-aware entry
+                # selection rather than re-deriving which gallery entry
+                # "wins" - the delta this produces vs. the relief-free
+                # qualify_sim is exactly the orientation contribution.
+                oriented_sim = t.best_similarity(
+                    emb,
+                    temb,
+                    query_orientation=orientation,
+                    orientation_relief=orientation_rank_weight,
+                    torso_rescue_weight=torso_rescue_weight,
+                )
+                rank_sim += oriented_sim - qualify_sim
+            if heading_rank_weight and has_confident_heading and dist > 0:
+                cos_heading = (dx * vcx + dy * vcy) / (dist * heading_speed)
+                rank_sim += heading_rank_weight * cos_heading
+            spatial_pairs.append((ti, key, qualify_sim, rank_sim))
 
     contenders_per_track: dict[int, int] = {}
     contenders_per_key: dict[int, int] = {}
-    for ti, key, _sim in spatial_pairs:
+    for ti, key, _qualify_sim, _rank_sim in spatial_pairs:
         contenders_per_track[ti] = contenders_per_track.get(ti, 0) + 1
         contenders_per_key[key] = contenders_per_key.get(key, 0) + 1
 
-    # Pass 2: apply the (possibly density-raised) threshold.
-    pairs = []  # (sim, ti, key, margin_for_this_pair)
-    for ti, key, sim in spatial_pairs:
+    # Pass 2: apply the (possibly density-raised) threshold to qualify_sim
+    # (appearance alone decides eligibility - heading/orientation only
+    # influence which already-eligible candidate wins, below).
+    pairs = []  # (rank_sim, ti, key, margin_for_this_pair)
+    for ti, key, qualify_sim, rank_sim in spatial_pairs:
         extra_contenders = max(contenders_per_track[ti], contenders_per_key[key]) - 1
         eff_threshold = reid_threshold + density_threshold_step * extra_contenders
         eff_margin = reid_margin + density_margin_step * extra_contenders
-        if sim >= eff_threshold:
-            pairs.append((sim, ti, key, eff_margin))
+        if qualify_sim >= eff_threshold:
+            pairs.append((rank_sim, ti, key, eff_margin))
     pairs.sort(key=lambda p: p[0], reverse=True)
 
     matches: dict[int, int] = {}
@@ -165,16 +250,68 @@ class Detection:
     torso_embedding: np.ndarray | None = None  # see track.torso_crop_bbox
 
 
-def compute_iou(box_a: tuple[float, float, float, float], box_b: tuple[float, float, float, float]) -> float:
+def _bbox_area(bbox: tuple[float, float, float, float]) -> float:
+    x1, y1, x2, y2 = bbox
+    return max(0.0, x2 - x1) * max(0.0, y2 - y1)
+
+
+def _bbox_intersection_area(
+    box_a: tuple[float, float, float, float], box_b: tuple[float, float, float, float]
+) -> float:
     ax1, ay1, ax2, ay2 = box_a
     bx1, by1, bx2, by2 = box_b
     ix1, iy1 = max(ax1, bx1), max(ay1, by1)
     ix2, iy2 = min(ax2, bx2), min(ay2, by2)
-    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
-    area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
-    area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
-    union = area_a + area_b - inter
+    return max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+
+
+def compute_iou(box_a: tuple[float, float, float, float], box_b: tuple[float, float, float, float]) -> float:
+    inter = _bbox_intersection_area(box_a, box_b)
+    union = _bbox_area(box_a) + _bbox_area(box_b) - inter
     return inter / union if union > 0 else 0.0
+
+
+def suppress_contained_detections(
+    detections: list[Detection], containment_threshold: float = 0.9
+) -> list[Detection]:
+    """Drop a detection whose bbox is almost entirely covered by a larger
+    detection's bbox - a duplicate/redundant detection of the same person,
+    not a second person.
+
+    In a tightly-seated group, the detector sometimes emits both a
+    full-body box for someone *and* a second, smaller box for just part of
+    them (e.g. upper-body-only) that the detector's own NMS doesn't merge -
+    plain IoU-based NMS compares intersection-over-*union*, which stays low
+    whenever the two boxes differ a lot in size, even if the smaller one is
+    almost entirely inside the larger one. This instead compares
+    intersection-over-the-*smaller*-box's-area (unaffected by the size
+    difference), which correctly flags that case. Confirmed against real
+    footage: two boxes for the same person with only ~49% IoU (comfortably
+    below any normal NMS threshold) at 97% containment - this function
+    drops the second one, standard NMS wouldn't have.
+
+    Deliberately conservative (default 0.9): two people sitting close enough
+    for their boxes to partially overlap is normal and must not be
+    suppressed - only a near-total containment is confidently a duplicate,
+    not a second real person.
+    """
+    order = sorted(range(len(detections)), key=lambda i: _bbox_area(detections[i].bbox_xyxy), reverse=True)
+    keep = [True] * len(detections)
+    for a in range(len(order)):
+        i = order[a]
+        if not keep[i]:
+            continue
+        for b in range(a + 1, len(order)):
+            j = order[b]
+            if not keep[j]:
+                continue
+            smaller_area = _bbox_area(detections[j].bbox_xyxy)
+            if smaller_area <= 0:
+                continue
+            inter = _bbox_intersection_area(detections[i].bbox_xyxy, detections[j].bbox_xyxy)
+            if inter / smaller_area >= containment_threshold:
+                keep[j] = False
+    return [d for d, k in zip(detections, keep) if k]
 
 
 def _bbox_center(bbox: tuple[float, float, float, float]) -> tuple[float, float]:
@@ -201,6 +338,10 @@ class Tracker:
         density_threshold_step: float = 0.05,
         density_margin_step: float = 0.05,
         orientation_relief: float = 0.12,
+        containment_suppression_threshold: float = 0.9,
+        torso_rescue_weight: float = 0.4,
+        reconcile_heading_rank_weight: float = 0.15,
+        reconcile_orientation_rank_weight: float = 0.12,
     ):
         self.tracks: list[Track] = []
         self.gallery_size = gallery_size
@@ -215,12 +356,18 @@ class Tracker:
         self.density_threshold_step = density_threshold_step
         self.density_margin_step = density_margin_step
         self.orientation_relief = orientation_relief
+        self.containment_suppression_threshold = containment_suppression_threshold
+        self.torso_rescue_weight = torso_rescue_weight
+        self.reconcile_heading_rank_weight = reconcile_heading_rank_weight
+        self.reconcile_orientation_rank_weight = reconcile_orientation_rank_weight
         # {abandoned_track_id: surviving_track_id} for every reconciliation
         # merge so far - a caller that already published `abandoned_track_id`
         # knows it was retroactively superseded, not actually a separate person.
         self.merged_ids: dict[int, int] = {}
 
     def update(self, detections: list[Detection], frame_area: float, dt_seconds: float) -> list[Track]:
+        detections = suppress_contained_detections(detections, self.containment_suppression_threshold)
+
         for t in self.tracks:
             t.age_seconds += dt_seconds
 
@@ -315,7 +462,28 @@ class Tracker:
             dt_seconds,
             density_threshold_step=self.density_threshold_step,
             density_margin_step=self.density_margin_step,
-            orientation_relief=self.orientation_relief,
+            # orientation_relief (the threshold-affecting kind) stays 0 here,
+            # unlike stage 2 below. The relief exists to recognize a person
+            # *reappearing* after an absence at a different orientation than
+            # their gallery sample (see human_tracking/orientation.py) - but
+            # a reconciliation candidate isn't absent, it's a track with a
+            # live, currently motion-matched detection this very frame.
+            # Granting the same "maybe they turned around while gone" relief
+            # as a free pass through the threshold here has no such
+            # justification, and real-footage testing found it was the
+            # deciding factor in false merges between two different,
+            # simultaneously-visible people of different orientations (e.g.
+            # one facing the robot, one with their back to it - an ordinary
+            # multi-person framing, not a rare edge case) - see
+            # docs/context/human_tracking.md. Orientation and heading are
+            # still used here, just only as ranking tie-breakers between
+            # already-qualified candidates - see
+            # reconcile_orientation_rank_weight/reconcile_heading_rank_weight
+            # below and _find_reid_matches' docstring.
+            orientation_relief=0.0,
+            torso_rescue_weight=self.torso_rescue_weight,
+            heading_rank_weight=self.reconcile_heading_rank_weight,
+            orientation_rank_weight=self.reconcile_orientation_rank_weight,
         )
         reconciled_young_tracks: set[Track] = set()
         for lost_ti, young_ti in reconcile_matches.items():
@@ -355,6 +523,7 @@ class Tracker:
             density_threshold_step=self.density_threshold_step,
             density_margin_step=self.density_margin_step,
             orientation_relief=self.orientation_relief,
+            torso_rescue_weight=self.torso_rescue_weight,
         )
         for ti, ui in reid_matches.items():
             di, d = unmatched_detections[ui]

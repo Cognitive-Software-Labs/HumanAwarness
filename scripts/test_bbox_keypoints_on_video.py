@@ -16,6 +16,8 @@ from pathlib import Path
 import cv2
 from ultralytics import YOLO
 
+from _video_rotation import ensure_upright
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -43,10 +45,12 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"{video_path.stem}_annotated.mp4"
 
+    input_path = ensure_upright(video_path)
+
     print(f"Loading model '{args.model}'...")
     model = YOLO(args.model)
 
-    cap = cv2.VideoCapture(str(video_path))
+    cap = cv2.VideoCapture(str(input_path))
     fps = cap.get(cv2.CAP_PROP_FPS) or 10.0
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -61,7 +65,7 @@ def main():
     # persist=True keeps the same tracker (and ID assignment) alive across
     # the stream=True generator's frames, instead of restarting per frame.
     results_stream = model.track(
-        source=str(video_path),
+        source=str(input_path),
         conf=args.conf,
         persist=True,
         stream=True,

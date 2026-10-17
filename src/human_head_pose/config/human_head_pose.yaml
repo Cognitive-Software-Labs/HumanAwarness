@@ -1,0 +1,14 @@
+head_pose_node:
+  ros__parameters:
+    image_topic: /camera/image_raw
+    detections_topic: human_tracking/tracked_detections
+    head_poses_topic: human_head_pose/head_poses
+    sync_slop_s: 0.05
+    weights_path: ""
+    device: cpu
+    min_keypoint_conf: 0.3
+    camera_hfov_deg: 70.0
+    head_k_h: 0.8
+    head_scale_alpha: 1.7
+    crop_margin: 0.2
+    min_head_px: 35.0

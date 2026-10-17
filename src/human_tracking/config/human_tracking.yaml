@@ -18,3 +18,7 @@ human_tracking_node:
     density_threshold_step: 0.05
     density_margin_step: 0.05
     orientation_relief: 0.12
+    containment_suppression_threshold: 0.9
+    torso_rescue_weight: 0.4
+    reconcile_heading_rank_weight: 0.15
+    reconcile_orientation_rank_weight: 0.12

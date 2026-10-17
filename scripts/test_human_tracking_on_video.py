@@ -22,9 +22,11 @@ sys.path.insert(0, str(REPO_ROOT / "src" / "human_perception"))
 import cv2
 from ultralytics import YOLO
 
+from _video_rotation import ensure_upright
+from _yolo_tracking_adapter import yolo_result_to_detections
 from human_tracking.reid_embedder import ReIDEmbedder
-from human_tracking.track import ACTIVE, LOST_GALLERY, LOST_KALMAN, torso_crop_bbox
-from human_tracking.tracker import Detection, Tracker
+from human_tracking.track import ACTIVE, LOST_GALLERY, LOST_KALMAN
+from human_tracking.tracker import Tracker
 
 # Only ACTIVE tracks are ever drawn (see the main loop) - a lost track has
 # no reliable current position to show - so there is just one draw color.
@@ -63,6 +65,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("video", help="path to a video file")
     parser.add_argument("--det-model", default="yolo26n-pose.pt")
+    parser.add_argument(
+        "--imgsz",
+        type=int,
+        default=640,
+        help="detector input resolution - higher helps separate people whose boxes overlap/merge "
+        "(e.g. sitting close together) at the cost of more compute; see docs/context/human_tracking.md's "
+        "multi-person validation for measured tradeoffs",
+    )
     parser.add_argument("--reid-weights", default=None, help="path to osnet_x1_0 weights (default: ~/.cache)")
     parser.add_argument("--reid-device", default="cpu", help="e.g. cpu, cuda:0 - device for the OSNet embedder")
     parser.add_argument("--conf", type=float, default=0.5)
@@ -98,6 +108,38 @@ def main():
         help="similarity bonus granted to a ReID comparison when the query and gallery sample have "
         "confidently-known, different keypoint-derived orientations (e.g. FRONTAL vs BACK) - see "
         "human_tracking/orientation.py",
+    )
+    parser.add_argument(
+        "--containment-suppression-threshold",
+        type=float,
+        default=0.9,
+        help="drop a raw detection whose bbox is at least this fraction covered by a larger "
+        "detection's bbox - a duplicate/fragment detection of the same person (common when people "
+        "sit very close together), not a second person - see tracker.py's suppress_contained_detections",
+    )
+    parser.add_argument(
+        "--torso-rescue-weight",
+        type=float,
+        default=0.4,
+        help="how much a higher torso-only similarity can lift a lower full-crop similarity, per "
+        "gallery entry (0 = full-crop only, 1 = old behavior where torso alone can fully decide) - "
+        "see tracker.py's Track.best_similarity",
+    )
+    parser.add_argument(
+        "--reconcile-heading-rank-weight",
+        type=float,
+        default=0.15,
+        help="during reconciliation, how much a lost track's Kalman-velocity heading can shift the "
+        "ranking (not eligibility) when choosing between multiple already-qualified candidates - 0 "
+        "disables it. See tracker.py's _find_reid_matches docstring",
+    )
+    parser.add_argument(
+        "--reconcile-orientation-rank-weight",
+        type=float,
+        default=0.12,
+        help="during reconciliation, how much keypoint-derived orientation consistency can shift the "
+        "ranking (not eligibility) when choosing between multiple already-qualified candidates - 0 "
+        "disables it",
     )
     parser.add_argument("--output-dir", default="test_output")
     parser.add_argument(
@@ -139,9 +181,15 @@ def main():
         density_threshold_step=args.density_threshold_step,
         density_margin_step=args.density_margin_step,
         orientation_relief=args.orientation_relief,
+        containment_suppression_threshold=args.containment_suppression_threshold,
+        torso_rescue_weight=args.torso_rescue_weight,
+        reconcile_heading_rank_weight=args.reconcile_heading_rank_weight,
+        reconcile_orientation_rank_weight=args.reconcile_orientation_rank_weight,
     )
 
-    cap = cv2.VideoCapture(str(video_path))
+    input_path = ensure_upright(video_path)
+
+    cap = cv2.VideoCapture(str(input_path))
     fps = cap.get(cv2.CAP_PROP_FPS) or 10.0
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -151,7 +199,7 @@ def main():
 
     writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"avc1"), fps, (width, height))
 
-    stream = detector(source=str(video_path), conf=args.conf, stream=True, verbose=False)
+    stream = detector(source=str(input_path), conf=args.conf, imgsz=args.imgsz, stream=True, verbose=False)
 
     t_start = time.time()
     frame_count = 0
@@ -167,41 +215,7 @@ def main():
 
     for result in stream:
         frame = result.orig_img
-        boxes = result.boxes
-        keypoints = result.keypoints
-
-        crops = []
-        torso_crops = []
-        dets_meta = []
-        if boxes is not None:
-            for i in range(len(boxes)):
-                x1, y1, x2, y2 = boxes.xyxy[i].tolist()
-                crops.append(frame[max(0, int(y1)) : int(y2), max(0, int(x1)) : int(x2)])
-                if keypoints is not None:
-                    kp_xy = keypoints.xy[i].tolist()
-                    kp_conf = keypoints.conf[i].tolist() if keypoints.conf is not None else [1.0] * len(kp_xy)
-                    kp = [(x, y, c) for (x, y), c in zip(kp_xy, kp_conf)]
-                else:
-                    kp = []
-                dets_meta.append(((x1, y1, x2, y2), float(boxes.conf[i]), kp))
-
-                torso_bbox = torso_crop_bbox(kp, (x1, y1, x2, y2)) if kp else None
-                if torso_bbox is not None:
-                    tx1, ty1, tx2, ty2 = torso_bbox
-                    torso_crops.append(frame[max(0, int(ty1)) : int(ty2), max(0, int(tx1)) : int(tx2)])
-                else:
-                    torso_crops.append(None)
-
-        # Embed full + torso crops in one batched call (embed() already
-        # treats a None entry as "no embedding for this one").
-        n = len(crops)
-        all_embeddings = embedder.embed(crops + torso_crops) if crops else []
-        embeddings, torso_embeddings = all_embeddings[:n], all_embeddings[n:]
-
-        detections = [
-            Detection(bbox_xyxy=bbox, confidence=conf, keypoints=kp, embedding=emb, torso_embedding=temb)
-            for (bbox, conf, kp), emb, temb in zip(dets_meta, embeddings, torso_embeddings)
-        ]
+        detections = yolo_result_to_detections(result, embedder)
 
         in_blackout = blackout_start is not None and blackout_start <= frame_count < blackout_end
         if in_blackout:

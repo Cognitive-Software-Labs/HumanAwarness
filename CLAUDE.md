@@ -29,6 +29,10 @@ workspace under `src/`.
   (Kalman motion + OSNet appearance matching), wired into a ROS2 node
   (`human_tracking` package, `human_tracking_node`). See
   `docs/context/human_tracking.md`.
+- **head pose relative to the robot** — per-tracked-person head
+  orientation via 6DRepNet360, combined with camera bearing into a
+  "facing the robot or not" angle (`human_head_pose` package,
+  `head_pose_node`). See `docs/context/head_pose.md`.
 
 <!--
 Template for new entries:

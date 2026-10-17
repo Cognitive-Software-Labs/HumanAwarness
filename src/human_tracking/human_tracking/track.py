@@ -182,6 +182,7 @@ class Track:
         torso_embedding: np.ndarray | None = None,
         query_orientation: str = ORIENTATION_UNKNOWN,
         orientation_relief: float = 0.0,
+        torso_rescue_weight: float = 0.4,
     ) -> float:
         """Max cosine similarity between the query and anything in this track's
         gallery - compared on the full-crop embedding, and also on the
@@ -191,6 +192,23 @@ class Track:
         match a partial/edge-clipped reappearance: their full-crop embeddings
         describe different amounts of visible body and are poorly comparable,
         but their torso embeddings describe the same region on both sides.
+
+        Per entry, torso only *partially* rescues a low full-crop score -
+        `full_sim + torso_rescue_weight * max(0, torso_sim - full_sim)` -
+        rather than overriding it outright (a plain `max`, the original
+        design). A torso crop is a small, generic region (shirt color/
+        texture, no face or hair) and real footage found it can score highly
+        similar between two different real people in plain/similarly-colored
+        tops even when the full-crop embedding correctly disagrees - a
+        confirmed false merge where every one of a track's 8 gallery entries
+        independently scored 0.65-0.76 on torso alone (comfortably over
+        `reid_threshold`) while the same entries' full-crop similarity
+        correctly stayed at 0.51-0.58 throughout (see
+        docs/context/human_tracking.md). A full `max` lets torso alone decide
+        whenever it happens to read higher, which is exactly backwards given
+        it's the weaker, less-discriminating signal of the two - this keeps
+        the full embedding as the primary vote and torso as a bounded assist,
+        not a free override.
 
         `orientation_relief` adds a per-entry similarity bonus (see
         human_tracking.orientation) when the query and that specific gallery
@@ -205,7 +223,8 @@ class Track:
         for entry in self.gallery:
             sim = float(np.dot(embedding, entry.embedding))
             if torso_embedding is not None and entry.torso_embedding is not None:
-                sim = max(sim, float(np.dot(torso_embedding, entry.torso_embedding)))
+                torso_sim = float(np.dot(torso_embedding, entry.torso_embedding))
+                sim = sim + torso_rescue_weight * max(0.0, torso_sim - sim)
             sim += orientation_mismatch_relief(query_orientation, entry.orientation, orientation_relief)
             best = max(best, sim)
         return best

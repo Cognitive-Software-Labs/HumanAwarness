@@ -75,6 +75,10 @@ class HumanTrackingNode(Node):
         self.declare_parameter("density_threshold_step", 0.05)
         self.declare_parameter("density_margin_step", 0.05)
         self.declare_parameter("orientation_relief", 0.12)
+        self.declare_parameter("containment_suppression_threshold", 0.9)
+        self.declare_parameter("torso_rescue_weight", 0.4)
+        self.declare_parameter("reconcile_heading_rank_weight", 0.15)
+        self.declare_parameter("reconcile_orientation_rank_weight", 0.12)
 
         image_topic = self.get_parameter("image_topic").value
         detections_topic = self.get_parameter("detections_topic").value
@@ -99,6 +103,10 @@ class HumanTrackingNode(Node):
             density_threshold_step=self.get_parameter("density_threshold_step").value,
             density_margin_step=self.get_parameter("density_margin_step").value,
             orientation_relief=self.get_parameter("orientation_relief").value,
+            containment_suppression_threshold=self.get_parameter("containment_suppression_threshold").value,
+            torso_rescue_weight=self.get_parameter("torso_rescue_weight").value,
+            reconcile_heading_rank_weight=self.get_parameter("reconcile_heading_rank_weight").value,
+            reconcile_orientation_rank_weight=self.get_parameter("reconcile_orientation_rank_weight").value,
         )
 
         self.bridge = CvBridge()

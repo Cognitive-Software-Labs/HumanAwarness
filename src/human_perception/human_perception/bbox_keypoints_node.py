@@ -40,6 +40,7 @@ class BboxKeypointsNode(Node):
         self.declare_parameter("model_path", "yolo26n-pose.pt")
         self.declare_parameter("device", "cpu")
         self.declare_parameter("confidence_threshold", 0.5)
+        self.declare_parameter("imgsz", 640)
         self.declare_parameter("publish_annotated", False)
         self.declare_parameter("annotated_image_topic", "human_perception/annotated_image")
 
@@ -48,6 +49,7 @@ class BboxKeypointsNode(Node):
         model_path = self.get_parameter("model_path").value
         self.device = self.get_parameter("device").value
         self.confidence_threshold = self.get_parameter("confidence_threshold").value
+        self.imgsz = self.get_parameter("imgsz").value
         self.publish_annotated = self.get_parameter("publish_annotated").value
         annotated_image_topic = self.get_parameter("annotated_image_topic").value
 
@@ -74,6 +76,7 @@ class BboxKeypointsNode(Node):
             frame,
             device=self.device,
             conf=self.confidence_threshold,
+            imgsz=self.imgsz,
             verbose=False,
         )
         result = results[0]

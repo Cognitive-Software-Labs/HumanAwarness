@@ -53,7 +53,13 @@ COCO-17 body keypoints. This is the raw perception input that later parts
 - Params: `model_path` (default `yolo26n-pose.pt` — nano size, for
   real-time CPU/edge use; override to `yolo26{s,m,l,x}-pose.pt` for more
   accuracy at the cost of speed), `device` (default `cpu`),
-  `confidence_threshold` (default `0.5`).
+  `confidence_threshold` (default `0.5`), `imgsz` (default `640`, the
+  detector's input resolution - raising it is the single most effective
+  lever found so far for separating two people whose boxes overlap/merge
+  when sitting close together, see `docs/context/human_tracking.md`'s
+  multi-person validation for the measured tradeoffs; not necessarily
+  monotonic - too high was measured to make it *worse* on real footage, so
+  don't just maximize it blindly).
 
 ## Environment: venv + ROS2 + colcon gotchas
 

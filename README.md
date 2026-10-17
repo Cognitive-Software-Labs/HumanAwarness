@@ -15,6 +15,11 @@ See `CLAUDE.md` for a running index of what's been built, and
   fused with a keypoint-derived body-orientation signal so a reappearance
   at a different facing direction isn't missed), wired into a ROS2 node
   (`human_tracking_node`). See `docs/context/human_tracking.md`.
+- **head pose relative to the robot** — per-tracked-person head
+  orientation (6DRepNet360) combined with that person's bearing from the
+  camera into a single "facing the robot or not" angle, wired into a ROS2
+  node (`human_head_pose` package, `head_pose_node`). See
+  `docs/context/head_pose.md`.
 
 ## Setup
 
@@ -37,6 +42,7 @@ python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 pip install -r src/human_perception/requirements.txt
 pip install -r src/human_tracking/requirements.txt
+pip install -r src/human_head_pose/requirements.txt
 
 # Build — must run via the venv's python so colcon bakes in the right
 # interpreter (a bare `colcon build` always uses system Python here)
@@ -75,6 +81,13 @@ ros2 run human_perception bbox_keypoints_node --ros-args \
 ```
 
 (Default params live in `src/human_perception/config/bbox_keypoints.yaml`.)
+For multiple people close together (e.g. seated at a table, bodies
+overlapping from the camera's angle), `model_path:=yolo26s-pose.pt` +
+`imgsz:=1280` measurably helped detect/separate them on real test footage —
+see `docs/context/human_tracking.md`'s multi-person validation for the
+actual numbers and why that combination (not just "bigger is always
+better") was the one that won. Not adopted as the default - it's a
+compute/accuracy tradeoff only the target hardware's capability can decide.
 
 ### human tracking / ReID
 
@@ -107,6 +120,37 @@ available. (Default params live in
 `src/human_tracking/config/human_tracking.yaml`; see
 `docs/context/human_tracking.md` for what each one trades off.)
 
+### head pose relative to the robot
+
+```bash
+ros2 launch human_head_pose human_head_pose.launch.py
+```
+
+Subscribes to the raw camera image (`image_topic`, default
+`/camera/image_raw`) *and* `human_tracking`'s tracked detections
+(`detections_topic`, default `human_tracking/tracked_detections`) — run all
+three nodes together. Publishes `human_head_pose/head_poses`
+(`human_awareness_msgs/PersonDetectionArray` again, with
+`head_yaw_deg`/`head_pitch_deg`/`head_roll_deg`/`bearing_deg`/
+`gaze_robot_deg` populated per detection — see `docs/context/head_pose.md`
+for what each means and how `gaze_robot_deg` is derived).
+
+```bash
+ros2 launch human_head_pose human_head_pose.launch.py \
+  params_file:=/path/to/my_params.yaml
+```
+
+```bash
+ros2 run human_head_pose head_pose_node --ros-args \
+  -p device:=cuda:0 -p camera_hfov_deg:=78.0
+```
+
+`camera_hfov_deg` (default 70°) is an assumed horizontal field of view used
+to compute each person's bearing from the camera — set it to your actual
+camera's real FOV, it isn't read from `CameraInfo` yet (see
+`docs/context/head_pose.md`'s "Not done yet"). (Default params live in
+`src/human_head_pose/config/human_head_pose.yaml`.)
+
 ## Testing on a static image (no ROS2 needed)
 
 To quickly check detection quality on your own photo(s) — no camera, no
@@ -126,8 +170,18 @@ gitignored — it's generated output, not something to commit.
 
 ## Testing on a video (no ROS2 needed)
 
-Same idea, but for a video file, with persistent per-person tracking IDs
-(via Ultralytics' built-in tracker) instead of per-frame numbering:
+All four video test scripts below auto-correct for phone-video rotation
+metadata (e.g. a WhatsApp clip recorded in portrait but stored as
+landscape pixels + a rotation tag) via `scripts/_video_rotation.py` - a
+rotated copy is cached under `~/.cache/human_awareness_scripts/` on first
+use. OpenCV and Ultralytics both ignore that metadata on their own, so
+without this a rotated clip gets silently processed sideways and every
+downstream result (bbox, keypoints, head pose) is meaningless - see
+`docs/context/human_tracking.md` for a confirmed real case.
+
+Same idea as testing on an image, but for a video file, with persistent
+per-person tracking IDs (via Ultralytics' built-in tracker) instead of
+per-frame numbering:
 
 ```bash
 source .venv/bin/activate
@@ -174,6 +228,12 @@ python3 scripts/test_human_tracking_on_video.py path/to/video.mp4 \
 # identical tracking results - see docs/context/human_tracking.md)
 python3 scripts/test_human_tracking_on_video.py path/to/video.mp4 \
   --reid-device cuda:0
+
+# multiple people close together (bodies overlapping from the camera's
+# angle) - a bigger detector + higher input resolution measurably helped
+# separate them on real footage, see docs/context/human_tracking.md
+python3 scripts/test_human_tracking_on_video.py path/to/video.mp4 \
+  --det-model yolo26s-pose.pt --imgsz 1280
 ```
 
 `--reconcile-window` controls how long (in seconds) a just-created track
@@ -192,3 +252,65 @@ several people are simultaneously plausible candidates) are there as a
 partial, no-regression mitigation, but testing found they don't fully fix
 it - see `docs/context/human_tracking.md` for exactly why, and don't trust
 this in a scene where several similarly-dressed people are likely.
+
+## Testing head pose (no ROS2 needed)
+
+```bash
+source .venv/bin/activate
+python3 scripts/test_head_pose_on_image.py path/to/photo.jpg
+```
+
+Saves an annotated copy to `test_output/<name>_head_pose.jpg` (person bbox
+in green, the extracted head crop in orange) and prints the per-person
+yaw/pitch/roll, bearing, and combined gaze angle. Downloads 6DRepNet360's
+weights to `~/.cache/human_head_pose/` on first use. Useful for checking
+6DRepNet360's output against a known head-turn direction before trusting it
+in the live node — see `docs/context/head_pose.md`'s "Empirical validation"
+section for what's been checked so far and what hasn't.
+
+Same idea, but for a video file, with an on-screen "LOOKING AT ROBOT" /
+"NOT LOOKING" label per person (green/red) based on `gaze_robot_deg`:
+
+```bash
+python3 scripts/test_head_pose_on_video.py path/to/video.mp4 \
+  --aware-threshold-deg 45
+```
+
+Saves an annotated copy to `test_output/<name>_head_pose.mp4` and prints
+how many frames got a valid head pose and how many of those were labeled
+"looking." `--aware-threshold-deg` is a provisional demo cutoff for this
+script, not a validated awareness threshold.
+
+## Testing human tracking + head pose together (no ROS2 needed)
+
+The two scripts above each run their own independent detection pass, with
+no shared identity between them. This instead runs one detection pass
+through `human_tracking`'s tracker first, then feeds each confirmed track
+into `human_head_pose`, so you see both logical parts together: a
+persistent track id next to whether that person is currently looking at
+the robot.
+
+```bash
+source .venv/bin/activate
+python3 scripts/test_tracking_and_head_pose_on_video.py path/to/video.mp4 \
+  --reid-device cuda:0 --head-pose-device cuda:0
+```
+
+Saves an annotated copy to
+`test_output/<name>_tracking_and_head_pose.mp4` (green box + `id N` from
+tracking, blue head crop, green/red "LOOKING AT ROBOT"/"NOT LOOKING" +
+gaze angle from head pose, all on the same person). A track currently
+`LOST_KALMAN` (no fresh detection this frame, but the motion model still
+has a recent predicted position) is drawn too, in orange with
+`id N (predicted)` and no head pose, rather than vanishing outright.
+
+For multiple people close together, `--det-model yolo26s-pose.pt --imgsz
+1280` measurably helped (see `docs/context/human_tracking.md`'s
+multi-person validation) - not the default, since it's a compute/accuracy
+tradeoff:
+
+```bash
+python3 scripts/test_tracking_and_head_pose_on_video.py path/to/video.mp4 \
+  --det-model yolo26s-pose.pt --imgsz 1280 \
+  --reid-device cuda:0 --head-pose-device cuda:0
+```

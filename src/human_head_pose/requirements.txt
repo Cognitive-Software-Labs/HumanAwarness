@@ -1,0 +1,3 @@
+# Install into the same venv as human_perception/human_tracking (torch,
+# numpy, opencv already satisfied from there). Nothing extra needed - the
+# 6DRepNet360 weights are plain HTTPS downloads, no gdown required.
