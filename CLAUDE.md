@@ -33,6 +33,10 @@ workspace under `src/`.
   orientation via 6DRepNet360, combined with camera bearing into a
   "facing the robot or not" angle (`human_head_pose` package,
   `head_pose_node`). See `docs/context/head_pose.md`.
+- **iris / gaze relative to the robot** — MediaPipe Face Landmarker gates,
+  MobileGaze estimates eye direction, fused with head pose (iris takes
+  priority once fixating and plausible) into the final "facing the robot"
+  angle (`human_gaze` package, `gaze_node`). See `docs/context/gaze.md`.
 
 <!--
 Template for new entries:

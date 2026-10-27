@@ -1,0 +1,35 @@
+gaze_node:
+  ros__parameters:
+    image_topic: /camera/image_raw
+    detections_topic: human_head_pose/head_poses
+    gaze_topic: human_gaze/gazes
+    sync_slop_s: 0.05
+    gaze_weights_path: ""
+    mediapipe_model_path: ""
+    device: cpu
+    min_keypoint_conf: 0.3
+    camera_hfov_deg: 70.0
+    head_k_h: 0.8
+    head_scale_alpha: 1.7
+    crop_margin: 0.2
+    mp_min_head_px: 80.0
+    min_eye_px: 12.0  # design doc's default (20.0) rejected ~nearly everything on real footage; lowered against real measured eye widths - see docs/context/gaze.md
+    max_yaw_gaze_deg: 45.0
+    max_eye_head_deg: 30.0
+    ear_min: 0.2
+    blur_min: 0.0
+    fixation_min_ms: 300.0
+    fixation_max_dev_deg: 4.0
+    blink_gap_max_ms: 300.0
+    one_euro_min_cutoff: 1.0
+    one_euro_beta: 0.3
+    # Phase-2 geometric decision (docs/context/gaze.md) - algorithm-level
+    # tuning knobs, not physical measurements of your robot/camera rig.
+    # For the physical calibration (camera height/tilt/offset, robot
+    # radius), see config/robot_rig.yaml instead - that file is loaded
+    # alongside this one by human_gaze.launch.py.
+    theta_contact_deg: 12.0
+    peripheral_buffer_deg: 5.0
+    head_only_extra_deg: 10.0  # design doc's default (15.0) was measured too lenient on real close-range footage - see docs/context/gaze.md
+    shoulder_width_prior_m: 0.40
+    person_height_prior_m: 1.70

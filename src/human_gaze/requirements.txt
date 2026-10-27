@@ -1,0 +1,5 @@
+# mediapipe needs a non-standard install (see README.md's Setup section,
+# "human_gaze" step) - `pip install -r requirements.txt` alone won't work
+# for this package. Not listed here as plain package names because the fix
+# requires an actual command-line flag (--no-deps), which a requirements
+# file can't express.

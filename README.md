@@ -20,6 +20,12 @@ See `CLAUDE.md` for a running index of what's been built, and
   camera into a single "facing the robot or not" angle, wired into a ROS2
   node (`human_head_pose` package, `head_pose_node`). See
   `docs/context/head_pose.md`.
+- **iris / gaze relative to the robot** — MediaPipe Face Landmarker gates
+  (eye size, blink, blur, head-turn range), MobileGaze estimates eye
+  direction, fused with head pose into the final "facing the robot" angle
+  (iris takes over once a fixation is confirmed and plausible, head-only
+  otherwise), wired into a ROS2 node (`human_gaze` package, `gaze_node`).
+  See `docs/context/gaze.md`.
 
 ## Setup
 
@@ -43,6 +49,11 @@ source .venv/bin/activate
 pip install -r src/human_perception/requirements.txt
 pip install -r src/human_tracking/requirements.txt
 pip install -r src/human_head_pose/requirements.txt
+# human_gaze's mediapipe dependency needs a non-standard install - see
+# src/human_gaze/requirements.txt for why (a plain `pip install -r` would
+# break cv_bridge the same way ultralytics/numpy did for human_perception):
+pip install --no-deps mediapipe
+pip install "protobuf>=4.25.3,<5"
 
 # Build — must run via the venv's python so colcon bakes in the right
 # interpreter (a bare `colcon build` always uses system Python here)
@@ -150,6 +161,62 @@ to compute each person's bearing from the camera — set it to your actual
 camera's real FOV, it isn't read from `CameraInfo` yet (see
 `docs/context/head_pose.md`'s "Not done yet"). (Default params live in
 `src/human_head_pose/config/human_head_pose.yaml`.)
+
+### iris / gaze relative to the robot
+
+```bash
+ros2 launch human_gaze human_gaze.launch.py
+```
+
+Subscribes to the raw camera image *and* `human_head_pose`'s output
+(`detections_topic`, default `human_head_pose/head_poses`) — run all four
+nodes together; gaze is only attempted for a detection whose head pose is
+already valid. Publishes `human_gaze/gazes`
+(`human_awareness_msgs/PersonDetectionArray` again, with `gaze_robot_deg`
+now fused from iris whenever `gaze_source` is `"iris"`, plus
+`iris_valid`/`iris_fixating`/`iris_yaw_deg` — see `docs/context/gaze.md`
+for what each means and why iris only ever fully replaces head pose, never
+partially blends with it).
+
+Also publishes the phase-2 geometric decision (`distance_m`,
+`distance_method`, `theta_to_robot_deg`, `sees_robot`, `direct_contact`) —
+a real robot-sized cone test at the person's estimated distance, replacing
+`gaze_robot_deg`'s flat angle threshold, and accounting for the camera not
+necessarily being mounted exactly at the robot's own center.
+
+Physical rig calibration (camera height/tilt/mounting offset, robot
+radius) lives in its own file, `src/human_gaze/config/robot_rig.yaml` —
+loaded automatically alongside `human_gaze.yaml` by the launch file above,
+kept separate specifically so setting up a new robot only means filling in
+that one small, heavily-commented file:
+
+```bash
+ros2 launch human_gaze human_gaze.launch.py \
+  robot_rig_file:=/path/to/my_robot_rig.yaml
+```
+
+**Every value in `robot_rig.yaml` is a placeholder, not a real
+calibration** — see `docs/context/gaze.md`'s "Design decisions: Phase 2"
+before trusting `sees_robot`/`direct_contact` on anything but relative
+comparisons.
+
+```bash
+ros2 launch human_gaze human_gaze.launch.py \
+  params_file:=/path/to/my_params.yaml
+```
+
+```bash
+ros2 run human_gaze gaze_node --ros-args \
+  -p device:=cuda:0 -p min_eye_px:=15.0
+```
+
+`min_eye_px` (design doc's recommended default was 20px; this project's
+own default is now 12px, lowered against real handheld footage — see
+`docs/context/gaze.md`'s "Empirical validation") and `head_only_extra_deg`
+(design doc's default 15°, this project's now 10°, same reasoning) were
+both measured stricter/looser in practice than they looked on paper —
+check that section before trusting either default on your own camera.
+(Default params live in `src/human_gaze/config/human_gaze.yaml`.)
 
 ## Testing on a static image (no ROS2 needed)
 
@@ -314,3 +381,44 @@ python3 scripts/test_tracking_and_head_pose_on_video.py path/to/video.mp4 \
   --det-model yolo26s-pose.pt --imgsz 1280 \
   --reid-device cuda:0 --head-pose-device cuda:0
 ```
+
+## Testing iris / gaze (no ROS2 needed)
+
+```bash
+source .venv/bin/activate
+python3 scripts/test_gaze_on_image.py path/to/photo.jpg
+```
+
+Saves an annotated copy to `test_output/<name>_gaze.jpg` (green person box,
+orange head crop implied by head pose, magenta face crop from MediaPipe)
+and prints, per person: the head-only vs. fused `[phase1]` gaze angle and
+which source won, plus the `[phase2]` geometric decision (estimated
+distance + method, the real angle to the robot, `sees`/`contact`). A single
+image can't hold a real fixation, so `fixation_min_ms` is set to 0 here
+specifically so you can still see a raw iris reading — real temporal
+fixation behavior is what the combined video script below actually
+exercises.
+
+## Testing human tracking + head pose + gaze together (no ROS2 needed)
+
+```bash
+source .venv/bin/activate
+python3 scripts/test_tracking_head_pose_and_gaze_on_video.py path/to/video.mp4 \
+  --reid-device cuda:0 --head-pose-device cuda:0 --gaze-device cuda:0
+```
+
+Saves an annotated copy to
+`test_output/<name>_tracking_head_pose_and_gaze.mp4` — same as the
+tracking+head-pose script above, plus a magenta MediaPipe face crop, the
+`[phase1]` flat gaze angle with `(iris)`/`(head)` showing which source won
+that frame, and the `[phase2]` geometric decision (estimated distance +
+method, angle to the robot, `sees`/`contact`) in a second line below it.
+Prints how many track-frames reached a confirmed iris fixation, how many
+actually had `gaze_robot_deg` sourced from iris (not always the same number
+— a fixation can still fail the plausibility-vs-head check), and both the
+`[phase1]` "LOOKING AT ROBOT" tally and the `[phase2]` `sees_robot`/
+`direct_contact` tallies side by side. See `docs/context/gaze.md`'s
+"Empirical validation" sections for real numbers on three different real
+clips, including a case where the flat phase-1 threshold produced
+visually-confirmed false positives that phase 2 correctly rejects, and
+where `min_eye_px` turned out stricter in practice than expected.

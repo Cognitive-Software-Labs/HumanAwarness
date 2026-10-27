@@ -1,0 +1,67 @@
+# Physical calibration for the phase-2 geometric "sees the robot" decision
+# (docs/context/gaze.md) - fill these in for YOUR actual robot and camera
+# mount. Everything here is a real-world measurement, not an algorithm
+# tuning knob (those live in human_gaze.yaml instead) - this file exists
+# separately specifically so a non-expert setting up a new robot only has
+# to find and fill in this one small file, not the full gaze-pipeline
+# tuning file.
+#
+# Loaded alongside human_gaze.yaml by human_gaze.launch.py - override just
+# this file's path (`robot_rig_file:=/path/to/your_robot_rig.yaml`) to
+# calibrate for your robot without touching the algorithm tuning file.
+#
+# The values below are PLACEHOLDERS (a generic ~1.2m-high, level, roughly
+# human-scale camera mount) - sees_robot/direct_contact are only physically
+# meaningful once these are replaced with your robot's real measurements.
+
+gaze_node:
+  ros__parameters:
+    # How high off the ground the CAMERA itself is mounted, in meters.
+    # Used only for the ground-plane distance estimate (from a visible
+    # ankle keypoint) - measure straight up from the floor to the lens.
+    camera_height_m: 1.2
+
+    # How far the camera is tilted DOWNWARD from level/horizontal, in
+    # degrees. 0 = camera pointed exactly at the horizon. Positive = tilted
+    # down (most robot-mounted cameras looking down at people are
+    # positive here). Negative = tilted up.
+    camera_pitch_deg: 0.0
+
+    # Where the ROBOT'S OWN BODY CENTER is relative to the camera, measured
+    # along the CAMERA'S OWN viewing directions (not the robot's body
+    # orientation) - i.e. stand at the camera, look the way it looks, and
+    # measure how far right/down/forward you'd walk to reach the robot's
+    # body center.
+    #   camera_offset_right_m:   positive = robot center is to the
+    #                            camera's right; negative = to its left.
+    #                            0 if the camera is mounted on the robot's
+    #                            own centerline.
+    #   camera_offset_down_m:    positive = robot center is below the
+    #                            camera (the usual case - most cameras are
+    #                            mounted up near head/eye height, above the
+    #                            robot's own geometric center);
+    #                            negative = above the camera.
+    #   camera_offset_forward_m: positive = robot center is in front of the
+    #                            camera (e.g. a camera mounted on a mast
+    #                            set back from the robot's front face);
+    #                            negative = behind the camera (e.g. a
+    #                            camera that sticks out in front of the
+    #                            robot's body, which is the more common
+    #                            case, so this is often negative).
+    # All three default to 0.0, meaning "the robot's center is exactly at
+    # the camera" - the project's original, simplifying assumption. This
+    # matters most for people standing CLOSE to the robot - at a few
+    # meters' distance, a camera offset by tens of centimeters makes only
+    # a small angular difference, but up close (under ~2m) it can be the
+    # difference between "direct eye contact" and not. See
+    # docs/context/gaze.md's "Design decisions: Phase 2" for the actual
+    # numbers this produces at different distances.
+    camera_offset_right_m: 0.0
+    camera_offset_down_m: 0.0
+    camera_offset_forward_m: 0.0
+
+    # Half the robot's own physical width, in meters - sets how wide a
+    # cone around the robot counts as "in view" at a given distance
+    # (robot_cone_deg = atan(robot_radius_m / distance)). Measure the
+    # robot's widest dimension (as seen from the front) and halve it.
+    robot_radius_m: 0.3
