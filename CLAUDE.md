@@ -10,6 +10,15 @@ A ROS2 system that estimates whether a human is aware of a robot's presence
 (human awareness detection), built incrementally as a multi-package ROS2
 workspace under `src/`.
 
+## Reference
+
+- **design doc** — full transcription of the project's design presentation
+  (model candidates/pros/cons/decisions for every stage, the target
+  pipeline architecture, parameter reference, and data-adapter contracts) —
+  the source the "Parts" below were built from, including the stages
+  ("C · Mediu"/environment, "D · Agregare"/aggregation) not started yet.
+  See `docs/context/design_doc.md`.
+
 ## Workflow (how this file is maintained)
 
 - Each new logical part (a package, node, algorithm, or pipeline stage) gets
