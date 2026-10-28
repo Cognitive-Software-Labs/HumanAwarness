@@ -82,9 +82,19 @@ head case has to actually be representable, not just the near-frontal range.
   simplification vs. the doc: the doc crops "along the hip-to-neck axis" (so
   a leaning body gets a correspondingly tilted crop); this always crops
   along the vertical image axis instead - see "Not done yet".
-  Requires both shoulder keypoints confident to even find the neck (reusing
+  Finding the neck needs at least one shoulder keypoint confident (reusing
   the `min_keypoint_conf=0.3` convention `human_tracking`'s own
-  keypoint-gated helpers use) - no shoulders confident, no crop.
+  keypoint-gated helpers use) - no shoulders confident, no crop. Originally
+  required *both* shoulders; loosened to a single-shoulder fallback after
+  real-footage labeling (`docs/context/labeling_tool.md`'s "Validating
+  against real footage") found this costing real recall - a turned/three-
+  quarter body stance routinely foreshortens the far shoulder below
+  confidence while the face stays clearly visible and gaze-readable. The
+  single shoulder's raw position is pulled halfway toward the nose's x
+  (when the nose is confident) rather than used directly, since it's
+  offset to one side of the actual head, not the body's center the way a
+  two-shoulder midpoint is - see `neck_point`'s own docstring in
+  `head_crop.py`.
 - **Adapters, named and separated per the design doc's "Adaptoare"
   principle** (`adapters.py`): "a component's output is rarely exactly the
   next one's input... an adapter is a pure function, tested on its own, so

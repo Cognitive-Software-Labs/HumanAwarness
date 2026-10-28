@@ -26,6 +26,10 @@ See `CLAUDE.md` for a running index of what's been built, and
   (iris takes over once a fixation is confirmed and plausible, head-only
   otherwise), wired into a ROS2 node (`human_gaze` package, `gaze_node`).
   See `docs/context/gaze.md`.
+- **manual labeling / review tool** — frame-by-frame ground-truth labeling
+  for gaze/awareness and ReID identity against real footage, scored
+  against exported predictions for precision/recall and false-merge/
+  ID-switch counts. See `docs/context/labeling_tool.md`.
 
 ## Setup
 
@@ -422,3 +426,78 @@ actually had `gaze_robot_deg` sourced from iris (not always the same number
 clips, including a case where the flat phase-1 threshold produced
 visually-confirmed false positives that phase 2 correctly rejects, and
 where `min_eye_px` turned out stricter in practice than expected.
+
+(ReID got a dedicated toggle-based labeling tool briefly, then it was
+dropped — real ReID errors turned out visually obvious just watching the
+tracked video, not worth a structured labeling pass for this project's
+footage. `label_review_tool.py`'s `i`/`x` keys below still handle an
+identity correction when you spot one by eye.)
+
+## Manually labeling head-pose-only ground truth (no ROS2 needed)
+
+For checking head pose's own "looking at the robot" signal specifically
+(no iris/gaze/MediaPipe models to load, so this is faster to iterate on
+than the combined tool below if gaze/iris isn't what you're validating
+right now):
+
+```bash
+source .venv/bin/activate
+python3 scripts/test_tracking_and_head_pose_on_video.py path/to/video.mp4 \
+  --export-jsonl data/ground_truth/video_headpose.jsonl
+python3 scripts/label_review_tool.py path/to/video.mp4 \
+  --predictions data/ground_truth/video_headpose.jsonl
+```
+
+Same tool, same keys as below — `l`/`k`/`u` to label looking/not-looking/
+unsure. `gaze_source` is always `"head"` (no iris fusion - that needs
+MediaPipe, see the combined script below), but the phase-2 geometric
+decision (distance estimate -> real 3D angle to the robot) still runs,
+straight off head pose - it only needs keypoints + camera params, not
+iris, so `sees_robot`/`direct_contact`/`distance_m` are real here too, not
+placeholders. Tune its angular tolerance with `--head-only-extra-deg` if
+recall looks too low for your footage - see `docs/context/gaze.md` for
+what each geometric-decision parameter trades off.
+
+## Manually labeling ground truth and scoring predictions (no ROS2 needed)
+
+First export structured predictions alongside the usual annotated video —
+one JSON record per visible track per frame (bbox, track_id/state, head
+pose, fused gaze, geometric decision, the final `is_looking` call):
+
+```bash
+source .venv/bin/activate
+python3 scripts/test_tracking_head_pose_and_gaze_on_video.py path/to/video.mp4 \
+  --export-jsonl data/ground_truth/video.jsonl
+```
+
+(Use a tracked directory like `data/ground_truth/`, not `test_output/` —
+the latter is gitignored, but your labels below are real manual work worth
+keeping.) Then review it frame-by-frame and label ground truth:
+
+```bash
+python3 scripts/label_review_tool.py path/to/video.mp4 \
+  --predictions data/ground_truth/video.jsonl
+```
+
+Click a person's box to select their track, then `l`/`k`/`u` to label the
+current frame looking / not-looking / unsure (held until the next label),
+`i` to correct an ID switch (merge two track_ids into one person_id), `x`
+to correct a false merge (split a track into two person_ids from this
+frame on), `]`/`[`/arrows to navigate, `n`/`N` to jump straight to the next
+disagreement once some labels exist, `e`/`E` to jump to the next track
+appearing/disappearing, `h` for the full key list, `s`/`q` to save. Labels
+are saved to `data/ground_truth/video.labels.json`.
+
+Once you've labeled some frames (on one video or several), score the
+predictions against them:
+
+```bash
+python3 scripts/score_predictions.py data/ground_truth/*.jsonl
+```
+
+Prints a gaze/awareness confusion matrix (precision, recall, false-positive
+rate) plus ReID error counts (ID switches, false merges) per video and in
+aggregate, with the exact frame ranges of every disagreement so you can
+jump straight back into `label_review_tool.py` at an edge case instead of
+re-scrubbing the whole clip. See `docs/context/labeling_tool.md` for the
+on-disk label format and design rationale.

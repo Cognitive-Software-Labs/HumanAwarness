@@ -1,0 +1,158 @@
+{
+  "video": "/home/laura/Downloads/WhatsApp Video 2026-10-17 at 13.37.19.mp4",
+  "identity_segments": [
+    {
+      "track_id": 1,
+      "start_frame": 2,
+      "end_frame": 678,
+      "person_id": "P1"
+    },
+    {
+      "track_id": 2,
+      "start_frame": 2,
+      "end_frame": 708,
+      "person_id": "P2"
+    },
+    {
+      "track_id": 3,
+      "start_frame": 49,
+      "end_frame": 123,
+      "person_id": "P3"
+    },
+    {
+      "track_id": 4,
+      "start_frame": 77,
+      "end_frame": 708,
+      "person_id": "P4"
+    },
+    {
+      "track_id": 5,
+      "start_frame": 388,
+      "end_frame": 409,
+      "person_id": "P5"
+    },
+    {
+      "track_id": 6,
+      "start_frame": 450,
+      "end_frame": 450,
+      "person_id": "P6"
+    },
+    {
+      "track_id": 7,
+      "start_frame": 560,
+      "end_frame": 564,
+      "person_id": "P7"
+    }
+  ],
+  "gaze_labels": {
+    "1": [
+      {
+        "start_frame": 2,
+        "end_frame": 13,
+        "label": "looking"
+      },
+      {
+        "start_frame": 14,
+        "end_frame": 14,
+        "label": "not_looking"
+      },
+      {
+        "start_frame": 15,
+        "end_frame": 63,
+        "label": "looking"
+      },
+      {
+        "start_frame": 65,
+        "end_frame": 69,
+        "label": "not_looking"
+      },
+      {
+        "start_frame": 71,
+        "end_frame": 147,
+        "label": "not_looking"
+      },
+      {
+        "start_frame": 148,
+        "end_frame": 155,
+        "label": "looking"
+      },
+      {
+        "start_frame": 156,
+        "end_frame": 158,
+        "label": "not_looking"
+      },
+      {
+        "start_frame": 159,
+        "end_frame": 192,
+        "label": "looking"
+      },
+      {
+        "start_frame": 193,
+        "end_frame": 206,
+        "label": "not_looking"
+      },
+      {
+        "start_frame": 208,
+        "end_frame": 265,
+        "label": "not_looking"
+      },
+      {
+        "start_frame": 267,
+        "end_frame": 271,
+        "label": "not_looking"
+      },
+      {
+        "start_frame": 272,
+        "end_frame": 328,
+        "label": "looking"
+      },
+      {
+        "start_frame": 329,
+        "end_frame": 370,
+        "label": "not_looking"
+      },
+      {
+        "start_frame": 372,
+        "end_frame": 423,
+        "label": "not_looking"
+      },
+      {
+        "start_frame": 450,
+        "end_frame": 450,
+        "label": "looking"
+      },
+      {
+        "start_frame": 452,
+        "end_frame": 523,
+        "label": "looking"
+      },
+      {
+        "start_frame": 524,
+        "end_frame": 560,
+        "label": "not_looking"
+      },
+      {
+        "start_frame": 562,
+        "end_frame": 567,
+        "label": "not_looking"
+      },
+      {
+        "start_frame": 568,
+        "end_frame": 578,
+        "label": "looking"
+      },
+      {
+        "start_frame": 579,
+        "end_frame": 618,
+        "label": "not_looking"
+      }
+    ],
+    "6": [
+      {
+        "start_frame": 450,
+        "end_frame": 451,
+        "label": "looking"
+      }
+    ]
+  }
+}

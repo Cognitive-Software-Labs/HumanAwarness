@@ -36,13 +36,33 @@ def neck_point(
     keypoints: list[tuple[float, float, float]],
     min_keypoint_conf: float = 0.3,
 ) -> tuple[float, float] | None:
-    """Midpoint of the shoulder keypoints, or None if either isn't confident."""
+    """Midpoint of the shoulder keypoints when both are confident. Falls
+    back to whichever single shoulder is confident, when only one is - a
+    turned/three-quarter body stance commonly foreshortens the far shoulder
+    below confidence while the face stays clearly visible and gaze-readable;
+    empirically confirmed (see docs/context/head_pose.md) to be costing real
+    recall by skipping pose entirely in exactly that case. In that fallback,
+    the single shoulder's raw x is offset to one side of the actual head
+    (it's not the body's center the way a two-shoulder midpoint is) - pulled
+    halfway toward the nose's x when the nose is confident too, since the
+    nose sits roughly above the true head center regardless of which
+    shoulder dropped out, which empirically produces a better-centered (and
+    so more reliable) crop than the raw shoulder position alone. None only
+    when neither shoulder clears the bar."""
     if len(keypoints) <= _RIGHT_SHOULDER:
         return None
     left, right = keypoints[_LEFT_SHOULDER], keypoints[_RIGHT_SHOULDER]
-    if left[2] < min_keypoint_conf or right[2] < min_keypoint_conf:
+    left_confident = left[2] >= min_keypoint_conf
+    right_confident = right[2] >= min_keypoint_conf
+    if left_confident and right_confident:
+        return (left[0] + right[0]) / 2.0, (left[1] + right[1]) / 2.0
+    if not left_confident and not right_confident:
         return None
-    return (left[0] + right[0]) / 2.0, (left[1] + right[1]) / 2.0
+    shoulder = left if left_confident else right
+    nose = keypoints[_NOSE] if len(keypoints) > _NOSE else None
+    if nose is not None and nose[2] >= min_keypoint_conf:
+        return (shoulder[0] + nose[0]) / 2.0, shoulder[1]
+    return shoulder[0], shoulder[1]
 
 
 def _head_scale(
@@ -54,9 +74,15 @@ def _head_scale(
     """max(shoulder width, alpha * neck-to-nose distance) - the neck-to-nose
     term is what keeps the scale from collapsing in profile, where shoulder
     width visually shrinks but the neck is still roughly as far from the
-    (now side-on) nose."""
+    (now side-on) nose. Shoulder width only counts when BOTH shoulders are
+    confident - when `neck_point` fell back to a single shoulder, the other
+    shoulder's own (unconfident) position is not a trustworthy distance
+    endpoint, so this leans entirely on the neck-to-nose term in that case."""
     left, right = keypoints[_LEFT_SHOULDER], keypoints[_RIGHT_SHOULDER]
-    shoulder_width = _distance((left[0], left[1]), (right[0], right[1]))
+    if left[2] >= min_keypoint_conf and right[2] >= min_keypoint_conf:
+        shoulder_width = _distance((left[0], left[1]), (right[0], right[1]))
+    else:
+        shoulder_width = 0.0
 
     nose = keypoints[_NOSE] if len(keypoints) > _NOSE else None
     if nose is not None and nose[2] >= min_keypoint_conf:

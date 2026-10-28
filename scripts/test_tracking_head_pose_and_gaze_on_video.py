@@ -18,6 +18,7 @@ Usage:
 """
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -92,6 +93,13 @@ def main():
     parser.add_argument("--camera-offset-down-m", type=float, default=0.0)
     parser.add_argument("--camera-offset-forward-m", type=float, default=0.0)
     parser.add_argument("--output-dir", default="test_output")
+    parser.add_argument(
+        "--export-jsonl", default=None, metavar="PATH",
+        help="also write one JSON record per visible track per frame (bbox, track_id/state, "
+        "head pose, fused gaze, geometric decision) to PATH - the structured counterpart to the "
+        "annotated video, consumed by scripts/label_review_tool.py and scripts/score_predictions.py. "
+        "Omit to skip export entirely.",
+    )
     args = parser.parse_args()
 
     video_path = Path(args.video)
@@ -133,6 +141,7 @@ def main():
     cap.release()
 
     writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"avc1"), fps, (width, height))
+    export_file = open(args.export_jsonl, "w") if args.export_jsonl else None
 
     stream = detector(source=str(input_path), conf=args.conf, imgsz=args.imgsz, stream=True, verbose=False)
 
@@ -180,6 +189,16 @@ def main():
                     annotated, "no head pose", (x1, max(y1 - 34, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
                     NO_HEAD_POSE_COLOR, 2,
                 )
+                if export_file is not None:
+                    export_file.write(json.dumps({
+                        "frame": frame_count, "timestamp_s": timestamp_s,
+                        "track_id": t.track_id, "state": t.state,
+                        "bbox": [x1, y1, x2, y2], "head_pose_valid": False,
+                        "head_yaw_deg": None, "head_pitch_deg": None, "bearing_deg": None,
+                        "head_only_gaze_robot_deg": None, "gaze_robot_deg": None, "gaze_source": None,
+                        "iris_fixating": False, "distance_m": None,
+                        "sees_robot": False, "direct_contact": False, "is_looking": False,
+                    }) + "\n")
                 continue
 
             tracked_pose_frames += 1
@@ -198,7 +217,8 @@ def main():
                 source = gaze_result.source
                 if source == "iris":
                     iris_sourced_frames += 1
-                if gaze_result.iris_fixating:
+                iris_fixating = gaze_result.iris_fixating
+                if iris_fixating:
                     fixating_frames += 1
                 if gaze_result.face_bbox_xyxy is not None:
                     fx1, fy1, fx2, fy2 = (int(v) for v in gaze_result.face_bbox_xyxy)
@@ -210,6 +230,7 @@ def main():
                 # as the head-pose-only script for why this state skips it.
                 gaze = head_only_gaze
                 source = "head"
+                iris_fixating = False
                 geometric = None
 
             sees_robot = geometric is not None and geometric.sees_robot
@@ -232,9 +253,23 @@ def main():
             color = LOOKING_COLOR if is_looking else NOT_LOOKING_COLOR
             cv2.putText(annotated, label, (x1, max(y1 - 58, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
+            if export_file is not None:
+                export_file.write(json.dumps({
+                    "frame": frame_count, "timestamp_s": timestamp_s,
+                    "track_id": t.track_id, "state": t.state,
+                    "bbox": [x1, y1, x2, y2], "head_pose_valid": True,
+                    "head_yaw_deg": yaw, "head_pitch_deg": pitch, "bearing_deg": bearing,
+                    "head_only_gaze_robot_deg": head_only_gaze, "gaze_robot_deg": gaze, "gaze_source": source,
+                    "iris_fixating": iris_fixating,
+                    "distance_m": geometric.distance_m if geometric is not None else None,
+                    "sees_robot": sees_robot, "direct_contact": direct_contact, "is_looking": is_looking,
+                }) + "\n")
+
         writer.write(annotated)
         frame_count += 1
 
+    if export_file is not None:
+        export_file.close()
     writer.release()
     elapsed = time.time() - t_start
     print(f"Processed {frame_count} frames in {elapsed:.1f}s ({frame_count / elapsed:.1f} fps)")
