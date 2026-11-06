@@ -154,7 +154,10 @@ three nodes together. Publishes `human_head_pose/head_poses`
 (`human_awareness_msgs/PersonDetectionArray` again, with
 `head_yaw_deg`/`head_pitch_deg`/`head_roll_deg`/`bearing_deg`/
 `gaze_robot_deg` populated per detection — see `docs/context/head_pose.md`
-for what each means and how `gaze_robot_deg` is derived).
+for what each means and how `gaze_robot_deg` is derived). Only ACTIVE
+tracks (and untracked detections) get a head pose: `LOST_KALMAN`/
+`LOST_GALLERY` tracks carry their last match's keypoints, so they pass
+through with `head_pose_valid` false.
 
 ```bash
 ros2 launch human_head_pose human_head_pose.launch.py \
@@ -181,7 +184,7 @@ ros2 launch human_gaze human_gaze.launch.py
 Subscribes to the raw camera image *and* `human_head_pose`'s output
 (`detections_topic`, default `human_head_pose/head_poses`) — run all four
 nodes together; gaze is only attempted for a detection whose head pose is
-already valid. Publishes `human_gaze/gazes`
+already valid, and never for a `LOST_*` track. Publishes `human_gaze/gazes`
 (`human_awareness_msgs/PersonDetectionArray` again, with `gaze_robot_deg`
 now fused from iris whenever `gaze_source` is `"iris"`, plus
 `iris_valid`/`iris_fixating`/`iris_yaw_deg` — see `docs/context/gaze.md`

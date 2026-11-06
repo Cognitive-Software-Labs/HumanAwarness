@@ -79,10 +79,10 @@ Not seen at all, the value settles back at 0.5 with confidence 0.
   head pose, and a phase-2 decision that actually ran (`distance_method`
   not `""`/`"none"`). Anything else is "no cue":
   - `LOST_KALMAN`/`LOST_GALLERY` tracks are still published, but with the
-    keypoints of their last match. Over ROS, `head_pose_node` and
-    `gaze_node` still compute a head pose and `sees_robot` for them, from a
-    crop of wherever the person used to be. The video script skips them.
-    The adapter ignores them either way.
+    keypoints of their last match. `head_pose_node` and `gaze_node` skip
+    them (as the video script does), so they arrive with
+    `head_pose_valid=false`. The adapter also checks the state itself, so
+    a stream recorded before those nodes skipped them still gives no cue.
   - A frame where phase 2 couldn't run (no confident nose/eyes, no
     distance) has `sees_robot=False` without having tested anything.
   - The script's flat phase-1 fallback (`--aware-threshold-deg`) stays a
@@ -235,11 +235,6 @@ head-only observation clear the design doc's `min_confidence` = 0.3.
   the old ID carries on with its own decayed state. The tracker records
   merges (`Tracker.merged_ids`) but doesn't publish them, so the node
   can't transfer the young ID's evidence.
-- **Upstream, over ROS: head pose and gaze run on LOST tracks' stale
-  keypoints** (`head_pose_node`, `gaze_node`). Awareness ignores those
-  frames, but any other consumer of `human_head_pose/head_poses` or
-  `human_gaze/gazes` should filter on `state == "ACTIVE"` until those nodes
-  skip them.
 - **Not run against a live camera or the full ROS chain** (perception →
   tracking → head pose → gaze → awareness), the same gap every other
   package notes. The node is verified on replayed real-clip cues; the

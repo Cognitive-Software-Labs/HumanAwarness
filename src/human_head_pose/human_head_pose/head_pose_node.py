@@ -8,6 +8,10 @@ PersonDetectionArray with its head-pose fields filled in (see
 human_awareness_msgs/PersonDetection.msg) - reusing the existing message
 again rather than introducing a parallel type, consistent with how
 human_tracking added track_id/state onto it instead of a new message.
+
+Only ACTIVE tracks and untracked detections get a head pose. LOST_KALMAN/
+LOST_GALLERY tracks carry their last match's keypoints, not this frame's, so
+they pass through unchanged with head_pose_valid=False.
 """
 
 import message_filters
@@ -17,7 +21,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image
 
 from human_awareness_msgs.msg import PersonDetectionArray
-from human_head_pose.adapters import extract_head_crop, person_detection_to_bbox_keypoints
+from human_head_pose.adapters import extract_head_crop, has_fresh_keypoints, person_detection_to_bbox_keypoints
 from human_head_pose.geometry import bearing_deg, gaze_robot_deg
 from human_head_pose.head_pose_estimator import HeadPoseEstimator
 
@@ -77,6 +81,8 @@ class HeadPoseNode(Node):
         image_width = frame.shape[1]
 
         bbox_keypoints = [person_detection_to_bbox_keypoints(det) for det in detections_msg.detections]
+        # No crop for a LOST_* track, so no pose and head_pose_valid=False
+        # below: its keypoints aren't from this frame (see has_fresh_keypoints).
         head_crops = [
             extract_head_crop(
                 frame,
@@ -87,7 +93,9 @@ class HeadPoseNode(Node):
                 self.crop_margin,
                 self.min_head_px,
             )[0]
-            for _bbox_xyxy, keypoints in bbox_keypoints
+            if has_fresh_keypoints(det)
+            else None
+            for det, (_bbox_xyxy, keypoints) in zip(detections_msg.detections, bbox_keypoints)
         ]
         poses = self.estimator.estimate(head_crops)
 

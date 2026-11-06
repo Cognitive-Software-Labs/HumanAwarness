@@ -53,7 +53,8 @@ head case has to actually be representable, not just the near-frontal range.
   `human_perception`'s own notes on this pattern), with
   `head_pose_valid`/`head_yaw_deg`/`head_pitch_deg`/`head_roll_deg`/
   `bearing_deg`/`gaze_robot_deg` filled in per detection (all zero/false
-  when a head crop couldn't be extracted that frame).
+  when a head crop couldn't be extracted that frame, and always for a
+  `LOST_KALMAN`/`LOST_GALLERY` track - see "Design decisions").
 
 ## Design decisions
 
@@ -109,6 +110,20 @@ head case has to actually be representable, not just the near-frontal range.
   straight in, with no ROS message in between - the Track already exposes
   plain tuples in the same shape the adapter expects, so no separate
   Track-specific adapter was needed, just reuse of this one.
+- **Only ACTIVE tracks and untracked detections get a head pose.**
+  `human_tracking` publishes `LOST_KALMAN`/`LOST_GALLERY` tracks on every
+  frame too (so per-person state downstream survives an occlusion), but
+  with their last match's keypoints (`Track.last_keypoints`), not this
+  frame's. A crop from them shows wherever the person used to be on the
+  current frame: background, or someone else who walked into that spot.
+  Those detections are republished unchanged with `head_pose_valid=false`,
+  and the model never sees their crop. `state == ""` (untracked, straight
+  from `human_perception`) is a fresh detection and still gets a pose. The
+  check is `adapters.has_fresh_keypoints`, shared with `gaze_node`; the
+  video scripts already skipped non-ACTIVE tracks the same way. Before
+  this, the node estimated a pose for LOST tracks too, so
+  `human_head_pose/head_poses` (and bags recorded from it) carried
+  stale-crop poses marked valid.
 - **Bearing-corrected gaze angle, not raw yaw.** A head-pose network trained
   on cropped-and-centered face patches has no way to know where in the frame
   that crop came from - appearance alone can't distinguish "centered and
@@ -243,6 +258,16 @@ whatsapp2 test clip instead:
   new crop geometry is doing its job - the orange crop box stays tightly on
   the head in the profile frame instead of including a lot of shoulder/
   background the way the old bbox-width crop did.
+- **LOST tracks skipped, checked over ROS**: `HeadPoseNode` and `GazeNode`
+  instantiated in one process, fed by a synthetic publisher (one 640x480
+  image + a `PersonDetectionArray`, 5 frames). The array holds an ACTIVE,
+  a `LOST_KALMAN`, a `LOST_GALLERY` and an untracked detection, all with
+  the same bbox and keypoints, so only `state` differs. On
+  `human_head_pose/head_poses`, ACTIVE and untracked: `head_pose_valid=
+  true`. Both LOST tracks: `head_pose_valid=false`, head-pose fields zero,
+  id/state/bbox/keypoints unchanged. The same input through the node as
+  it was before got the ACTIVE track's pose, marked valid, on both LOST
+  tracks. See `gaze.md` for the `human_gaze/gazes` side of the same run.
 
 ## Parameters (`head_pose_node`)
 

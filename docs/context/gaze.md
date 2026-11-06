@@ -145,6 +145,20 @@ frame, MobileGaze decides *what angle* if so.
   lives entirely in the phase-2 geometric decision below (`sees_robot`/
   `direct_contact`), not retrofitted into this field, so existing consumers
   of `gaze_robot_deg` see no behavior change from phase 2's addition.
+- **LOST tracks get no gaze, whatever head pose they arrive with.** Like
+  `head_pose_node`, `gaze_node` only processes ACTIVE tracks and untracked
+  detections (`state == ""`). A `LOST_KALMAN`/`LOST_GALLERY` track carries
+  its last match's keypoints, so its head crop, face crop and phase-2
+  reference pixel would all come from wherever the person used to be. It
+  is republished unchanged except for `head_pose_valid=false`, with every
+  gaze field at its default (`sees_robot=false`, `distance_method=""`).
+  The node checks `state` itself (`human_head_pose.adapters.
+  has_fresh_keypoints`) instead of relying on `head_pose_valid`, so input
+  from an older `head_pose_node`, or a bag recorded before it skipped LOST
+  tracks, can't leak through. That input's stale head-pose numbers are
+  left as they came; only the flag is cleared. A LOST track's fixation/
+  smoothing state is still kept (`prune` gets every published `track_id`),
+  as before. The video script already skipped non-ACTIVE tracks this way.
 
 ### Phase 2: the geometric decision rule
 
@@ -423,6 +437,17 @@ extensions):
   Regression-checked on the first validated clip (24% fixation rate,
   min_eye_px was never the limiting factor there) - unaffected, as
   expected: 43/177, unchanged.
+- **LOST tracks skipped, checked over ROS** (the same in-process run as
+  `head_pose.md`'s: `HeadPoseNode` -> `GazeNode`, synthetic publisher, 5
+  frames of an ACTIVE, a `LOST_KALMAN`, a `LOST_GALLERY` and an untracked
+  detection with identical bbox and keypoints). On `human_gaze/gazes`,
+  ACTIVE and untracked got a phase-2 decision (`ground_plane`); both LOST
+  tracks came out with `head_pose_valid=false`, every gaze field at its
+  default and id/state/bbox/keypoints unchanged. `GazeNode` alone, fed
+  LOST tracks marked `head_pose_valid=true` with a facing head pose (yaw
+  10°): `sees_robot=true` for them before the change, `head_pose_valid=
+  false`, `sees_robot=false` and no phase-2 decision after, while the
+  ACTIVE track with the same input still got `sees_robot=true`.
 
 ### Empirical validation: phase 1 vs. phase 2
 

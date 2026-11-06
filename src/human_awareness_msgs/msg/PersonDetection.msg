@@ -15,7 +15,8 @@ float32 bbox_height
 human_awareness_msgs/Keypoint2D[] keypoints   # COCO-17 order
 
 # Head pose, from human_head_pose (all zero/false if head_pose_valid is false -
-# no head crop could be extracted this frame, e.g. shoulders not confident).
+# no head crop could be extracted this frame, e.g. shoulders not confident, or
+# a LOST_KALMAN/LOST_GALLERY track, whose keypoints are from its last match).
 bool head_pose_valid
 float32 head_yaw_deg     # 6DRepNet360 output, degrees, full -180..180 range
 float32 head_pitch_deg
@@ -31,7 +32,8 @@ float32 gaze_robot_deg   # fused "facing the robot" angle, -180..180 (~0 = facin
 
 # Iris/gaze, from human_gaze (all zero/false, gaze_source "head", if
 # iris_valid is false - gating failed this frame, or head is turned too far
-# for eyes to be usable; see docs/context/gaze.md).
+# for eyes to be usable; see docs/context/gaze.md). Left at the defaults
+# (gaze_source "") when head_pose_valid is false: gaze isn't attempted then.
 bool iris_valid           # an iris reading was gated through and estimated this frame
 bool iris_fixating        # iris_valid *and* held steady long enough to trust (see fixation.py)
 string gaze_source        # "head" or "iris" - which signal produced gaze_robot_deg above
