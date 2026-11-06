@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Run the full chain - detection, human_tracking's ReID tracker,
-human_head_pose's head pose, and human_gaze's iris/gaze - on one video, and
-save a single annotated copy. No ROS2 required.
+human_head_pose's head pose, human_gaze's iris/gaze, and human_awareness's
+per-person awareness over time - on one video, and save a single annotated
+copy. No ROS2 required.
 
 Extends scripts/test_tracking_and_head_pose_on_video.py with the gaze stage:
 per confirmed track, re-derives the same head crop for MediaPipe gating,
@@ -10,7 +11,9 @@ pose - the same shape of adaptation gaze_node does for a track arriving
 over ROS, just without the message round-trip. This is the primary way
 human_gaze gets validated against real footage (see docs/context/gaze.md)
 since fixation detection needs real consecutive frames, which a single
-test image can't exercise.
+test image can't exercise. Awareness gets the same cue awareness_node builds
+from a PersonDetection (an ACTIVE track's phase-2 sees_robot, tagged with its
+gaze source), so the two give the same values for the same frames.
 
 Usage:
     source .venv/bin/activate
@@ -28,12 +31,14 @@ sys.path.insert(0, str(REPO_ROOT / "src" / "human_tracking"))
 sys.path.insert(0, str(REPO_ROOT / "src" / "human_head_pose"))
 sys.path.insert(0, str(REPO_ROOT / "src" / "human_gaze"))
 sys.path.insert(0, str(REPO_ROOT / "src" / "human_perception"))
+sys.path.insert(0, str(REPO_ROOT / "src" / "human_awareness"))
 
 import cv2
 from ultralytics import YOLO
 
 from _video_rotation import ensure_upright
 from _yolo_tracking_adapter import yolo_result_to_detections
+from human_awareness.awareness import AwarenessAggregator, AwarenessCue
 from human_gaze.gaze_pipeline import GazePipeline
 from human_head_pose.adapters import extract_head_crop
 from human_head_pose.geometry import bearing_deg, gaze_robot_deg
@@ -49,6 +54,24 @@ FACE_CROP_COLOR = (255, 0, 255)
 LOOKING_COLOR = (0, 220, 0)
 NOT_LOOKING_COLOR = (0, 0, 230)
 NO_HEAD_POSE_COLOR = (160, 160, 160)
+AWARENESS_BAR_BG_COLOR = (90, 90, 90)
+
+
+def awareness_color(value: float) -> tuple[int, int, int]:
+    """Red at 0 through green at 1 (BGR)."""
+    return 0, int(220 * value), int(230 * (1.0 - value))
+
+
+def draw_awareness(image, value: float, confidence: float, x: int, y: int) -> None:
+    text = f"aware {value:.2f} conf {confidence:.2f}"
+    color = awareness_color(value)
+    (text_w, text_h), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+    bar_w = 80
+    x = max(0, min(x, image.shape[1] - (text_w + 8 + bar_w)))  # keep the whole label inside the frame
+    cv2.putText(image, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+    bar_x = x + text_w + 8
+    cv2.rectangle(image, (bar_x, y - text_h), (bar_x + bar_w, y), AWARENESS_BAR_BG_COLOR, -1)
+    cv2.rectangle(image, (bar_x, y - text_h), (bar_x + int(bar_w * value), y), color, -1)
 
 
 def main():
@@ -98,11 +121,21 @@ def main():
         "would looking at the camera (>= 1.0 disables) - see docs/context/gaze.md",
     )
     parser.add_argument("--iris-shift-per-yaw-deg", type=float, default=0.0027)
+    parser.add_argument(
+        "--tau-awareness-s", type=float, default=8.0,
+        help="awareness fades with this time constant once the person stops seeing the robot - "
+        "see docs/context/awareness.md",
+    )
+    parser.add_argument("--cue-max-age-s", type=float, default=0.5)
+    parser.add_argument("--awareness-rise-time-s", type=float, default=0.5)
+    parser.add_argument("--awareness-confidence-time-s", type=float, default=2.0)
+    parser.add_argument("--awareness-weight-iris", type=float, default=1.0)
+    parser.add_argument("--awareness-weight-head", type=float, default=0.5)
     parser.add_argument("--output-dir", default="test_output")
     parser.add_argument(
         "--export-jsonl", default=None, metavar="PATH",
         help="also write one JSON record per visible track per frame (bbox, track_id/state, "
-        "head pose, fused gaze, geometric decision) to PATH - the structured counterpart to the "
+        "head pose, fused gaze, geometric decision, awareness) to PATH - the structured counterpart to the "
         "annotated video, consumed by scripts/label_review_tool.py and scripts/score_predictions.py. "
         "Omit to skip export entirely.",
     )
@@ -137,6 +170,14 @@ def main():
         iris_shift_per_yaw_deg=args.iris_shift_per_yaw_deg,
     )
     tracker = Tracker(reid_threshold=args.reid_threshold)
+    awareness = AwarenessAggregator(
+        tau_s=args.tau_awareness_s,
+        cue_max_age_s=args.cue_max_age_s,
+        rise_time_s=args.awareness_rise_time_s,
+        confidence_time_s=args.awareness_confidence_time_s,
+        weight_iris=args.awareness_weight_iris,
+        weight_head=args.awareness_weight_head,
+    )
 
     input_path = ensure_upright(video_path)
 
@@ -162,6 +203,7 @@ def main():
     sees_robot_frames = 0
     direct_contact_frames = 0
     eyes_averted_frames = 0
+    awareness_cue_frames = 0
     for result in stream:
         frame = result.orig_img
         detections = yolo_result_to_detections(result, reid_embedder)
@@ -181,6 +223,10 @@ def main():
 
         annotated = frame.copy()
         timestamp_s = frame_count * dt_seconds
+        # Awareness needs every visible track's cue before it can be drawn or
+        # exported, so rows are written after this loop.
+        awareness_cues: dict[int, AwarenessCue] = {}
+        pending_rows = []
         for t, crop_bbox, pose in zip(visible_tracks, crop_boxes, poses):
             box_color = ACTIVE_COLOR if t.state == ACTIVE else PREDICTED_COLOR
             x1, y1, x2, y2 = (int(v) for v in t.kalman.bbox)
@@ -198,17 +244,16 @@ def main():
                     annotated, "no head pose", (x1, max(y1 - 34, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
                     NO_HEAD_POSE_COLOR, 2,
                 )
-                if export_file is not None:
-                    export_file.write(json.dumps({
-                        "frame": frame_count, "timestamp_s": timestamp_s,
-                        "track_id": t.track_id, "state": t.state,
-                        "bbox": [x1, y1, x2, y2], "head_pose_valid": False,
-                        "head_yaw_deg": None, "head_pitch_deg": None, "bearing_deg": None,
-                        "head_only_gaze_robot_deg": None, "gaze_robot_deg": None, "gaze_source": None,
-                        "iris_fixating": False, "distance_m": None,
-                        "sees_robot": False, "direct_contact": False,
-                        "iris_offset": None, "eyes_averted": False, "is_looking": False,
-                    }) + "\n")
+                pending_rows.append((t, x1, y1, {
+                    "frame": frame_count, "timestamp_s": timestamp_s,
+                    "track_id": t.track_id, "state": t.state,
+                    "bbox": [x1, y1, x2, y2], "head_pose_valid": False,
+                    "head_yaw_deg": None, "head_pitch_deg": None, "bearing_deg": None,
+                    "head_only_gaze_robot_deg": None, "gaze_robot_deg": None, "gaze_source": None,
+                    "iris_fixating": False, "distance_m": None,
+                    "sees_robot": False, "direct_contact": False,
+                    "iris_offset": None, "eyes_averted": False, "is_looking": False,
+                }))
                 continue
 
             tracked_pose_frames += 1
@@ -270,18 +315,38 @@ def main():
             color = LOOKING_COLOR if is_looking else NOT_LOOKING_COLOR
             cv2.putText(annotated, label, (x1, max(y1 - 58, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
+            # Same rule as human_awareness.adapters.person_detection_to_cue:
+            # only an ACTIVE track whose phase-2 decision actually ran. The
+            # flat-threshold fallback above stays a display-only label.
+            if t.state == ACTIVE and has_geometric:
+                awareness_cues[t.track_id] = AwarenessCue(sees_robot=sees_robot, source=source)
+                awareness_cue_frames += 1
+
+            pending_rows.append((t, x1, y1, {
+                "frame": frame_count, "timestamp_s": timestamp_s,
+                "track_id": t.track_id, "state": t.state,
+                "bbox": [x1, y1, x2, y2], "head_pose_valid": True,
+                "head_yaw_deg": yaw, "head_pitch_deg": pitch, "bearing_deg": bearing,
+                "head_only_gaze_robot_deg": head_only_gaze, "gaze_robot_deg": gaze, "gaze_source": source,
+                "iris_fixating": iris_fixating,
+                "distance_m": geometric.distance_m if geometric is not None else None,
+                "sees_robot": sees_robot, "direct_contact": direct_contact,
+                "iris_offset": iris_offset, "eyes_averted": eyes_averted, "is_looking": is_looking,
+            }))
+
+        # Every published track, LOST_GALLERY included (no cue), so its state
+        # keeps decaying while it's gone and carries on if ReID brings it back.
+        published_ids = {t.track_id for t in published}
+        estimates = {tid: awareness.observe(tid, timestamp_s, awareness_cues.get(tid)) for tid in published_ids}
+        awareness.prune(published_ids)
+
+        for t, x1, y1, row in pending_rows:
+            estimate = estimates[t.track_id]
+            draw_awareness(annotated, estimate.value, estimate.confidence, x1, max(y1 - 82, 15))
             if export_file is not None:
-                export_file.write(json.dumps({
-                    "frame": frame_count, "timestamp_s": timestamp_s,
-                    "track_id": t.track_id, "state": t.state,
-                    "bbox": [x1, y1, x2, y2], "head_pose_valid": True,
-                    "head_yaw_deg": yaw, "head_pitch_deg": pitch, "bearing_deg": bearing,
-                    "head_only_gaze_robot_deg": head_only_gaze, "gaze_robot_deg": gaze, "gaze_source": source,
-                    "iris_fixating": iris_fixating,
-                    "distance_m": geometric.distance_m if geometric is not None else None,
-                    "sees_robot": sees_robot, "direct_contact": direct_contact,
-                    "iris_offset": iris_offset, "eyes_averted": eyes_averted, "is_looking": is_looking,
-                }) + "\n")
+                row["awareness_value"] = estimate.value
+                row["awareness_confidence"] = estimate.confidence
+                export_file.write(json.dumps(row) + "\n")
 
         writer.write(annotated)
         frame_count += 1
@@ -299,6 +364,7 @@ def main():
     )
     print(f"sees_robot: {sees_robot_frames}, direct_contact: {direct_contact_frames}")
     print(f"Head-only frames with eyes judged averted (iris-position veto): {eyes_averted_frames}")
+    print(f"Track-frames that fed awareness a cue: {awareness_cue_frames}")
     print(f"-> {out_path}")
 
 

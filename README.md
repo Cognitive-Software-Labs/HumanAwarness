@@ -30,6 +30,12 @@ See `CLAUDE.md` for a running index of what's been built, and
   for gaze/awareness and ReID identity against real footage, scored
   against exported predictions for precision/recall and false-merge/
   ID-switch counts. See `docs/context/labeling_tool.md`.
+- **awareness over time** — the first per-person state (stage D): for each
+  track_id, a value + confidence for "knows the robot is there", rising
+  within about a second while the gaze stage says the person sees the
+  robot, fading over ~8 s afterwards, and kept across LOST/ReID gaps
+  (`human_awareness` package, `awareness_node`). See
+  `docs/context/awareness.md`.
 
 ## Setup
 
@@ -229,6 +235,47 @@ own default is now 12px, lowered against real handheld footage — see
 both measured stricter/looser in practice than they looked on paper —
 check that section before trusting either default on your own camera.
 (Default params live in `src/human_gaze/config/human_gaze.yaml`.)
+
+### awareness over time
+
+```bash
+ros2 launch human_awareness human_awareness.launch.py
+```
+
+Subscribes to `gaze_node`'s output (`gazes_topic`, default
+`human_gaze/gazes`) — run it after the four nodes above. Publishes
+`human_awareness/awareness`: the same `PersonDetectionArray`, one message
+per input message with the same header, with `awareness_value` and
+`awareness_confidence` (both 0..1) filled in for every tracked person,
+LOST ones included.
+
+- `awareness_value` rises while the person sees the robot (`sees_robot`)
+  and fades over `tau_awareness_s` (8 s) after they stop. A new person
+  starts at 0.5 ("don't know"), and someone the camera can't see drifts
+  back to 0.5, never to 0.
+- `awareness_confidence` says how much recent observation backs the
+  value: 0 for a new or long-unseen person. Ignore the value when it's low
+  (the design doc uses 0.3).
+- Iris-sourced decisions count double head-only ones.
+- Only fresh observations count: an ACTIVE track with a valid head pose
+  and a phase-2 decision.
+
+The state is kept per `track_id` while `human_tracking` still publishes
+it, so it carries on when ReID brings a person back. Time comes from the
+message stamps, so a recorded bag gives the same result at any playback
+speed. See `docs/context/awareness.md` for the model, its parameters
+(`src/human_awareness/config/human_awareness.yaml`) and how it behaves on
+the labeled clip.
+
+```bash
+ros2 run human_awareness awareness_node --ros-args -p tau_awareness_s:=5.0
+```
+
+Unit tests for the core (no ROS needed):
+
+```bash
+PYTHONPATH=src/human_awareness python3 -m pytest src/human_awareness/test -q
+```
 
 ## Testing on a static image (no ROS2 needed)
 
@@ -434,6 +481,14 @@ actually had `gaze_robot_deg` sourced from iris (not always the same number
 clips, including a case where the flat phase-1 threshold produced
 visually-confirmed false positives that phase 2 correctly rejects, and
 where `min_eye_px` turned out stricter in practice than expected.
+
+Each person also gets their awareness over time, drawn above the box as
+`aware 0.82 conf 0.61` plus a bar (red at 0, green at 1). It is computed
+the same way `awareness_node` does it. `--export-jsonl` rows carry it as
+`awareness_value` / `awareness_confidence`. Tune it with
+`--tau-awareness-s`, `--cue-max-age-s`, `--awareness-rise-time-s`,
+`--awareness-confidence-time-s` and `--awareness-weight-iris` /
+`--awareness-weight-head` (see `docs/context/awareness.md`).
 
 (ReID got a dedicated toggle-based labeling tool briefly, then it was
 dropped — real ReID errors turned out visually obvious just watching the

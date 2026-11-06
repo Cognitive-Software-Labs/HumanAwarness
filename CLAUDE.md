@@ -15,9 +15,9 @@ workspace under `src/`.
 - **design doc** — full transcription of the project's design presentation
   (model candidates/pros/cons/decisions for every stage, the target
   pipeline architecture, parameter reference, and data-adapter contracts) —
-  the source the "Parts" below were built from, including the stages
-  ("C · Mediu"/environment, "D · Agregare"/aggregation) not started yet.
-  See `docs/context/design_doc.md`.
+  the source the "Parts" below were built from, including what isn't
+  built yet ("C · Mediu"/environment, and everything in "D · Agregare"/
+  aggregation except awareness). See `docs/context/design_doc.md`.
 
 ## Workflow (how this file is maintained)
 
@@ -52,6 +52,10 @@ workspace under `src/`.
   full gaze/iris predictions), scored against exported predictions
   (`scripts/label_review_tool.py`, `scripts/score_predictions.py`). See
   `docs/context/labeling_tool.md`.
+- **awareness over time** — first piece of stage D: a per-track_id value +
+  confidence for "knows the robot is there", rising while `sees_robot`
+  holds and fading over `tau_awareness_s` (`human_awareness` package,
+  `awareness_node`). See `docs/context/awareness.md`.
 
 <!--
 Template for new entries:

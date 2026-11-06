@@ -1,0 +1,14 @@
+awareness_node:
+  ros__parameters:
+    gazes_topic: human_gaze/gazes
+    awareness_topic: human_awareness/awareness
+    # Design doc's "D · Aggregation" values.
+    tau_awareness_s: 8.0  # how long a sighting keeps someone aware
+    cue_max_age_s: 0.5  # a gaze cue counts for at most this long after its frame
+    init_value: 0.5  # a new track_id starts at "don't know" (confidence 0)
+    # Not in the design doc - see docs/context/awareness.md.
+    rise_time_s: 0.5  # time constant of the rise while seeing the robot, at weight 1
+    confidence_time_s: 2.0  # time constant of confidence build-up while in view, at weight 1
+    # Per-source weights (the design doc's fusion_weights): iris readings count double head-only ones.
+    weight_iris: 1.0
+    weight_head: 0.5

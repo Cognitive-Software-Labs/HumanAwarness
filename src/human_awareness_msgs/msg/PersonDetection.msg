@@ -52,3 +52,11 @@ string distance_method    # which tier produced the underlying camera-to-person 
 float32 theta_to_robot_deg  # angle between the person's gaze vector and the true direction to the robot
 bool sees_robot            # theta_to_robot_deg within the robot's cone + peripheral_buffer_deg (+ head_only_extra_deg if gaze_source is "head")
 bool direct_contact        # theta_to_robot_deg within theta_contact_deg - distance-independent, stricter
+
+# Awareness, from human_awareness ("knows the robot is there"): per-track_id
+# state accumulated over time from sees_robot above, not a property of this
+# frame alone - see docs/context/awareness.md. Filled in for ACTIVE and LOST_*
+# tracks alike. The defaults (0.5, 0) are "don't know": where a new track_id
+# starts, and what a detection that never went through awareness_node carries.
+float32 awareness_value 0.5       # 0..1; rises while the person sees the robot, fades over tau_awareness_s otherwise
+float32 awareness_confidence 0.0  # 0..1; how much recent observation backs awareness_value - 0 = none

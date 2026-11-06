@@ -308,10 +308,9 @@ whatsapp2 test clip instead:
   notes for itself, inherited here since this node depends on that one's
   output.
 - **No automated test suite**, consistent with the other packages so far.
-- **No notion yet of what "aware" actually means as a boolean/threshold** -
-  this node produces the angle; turning `gaze_robot_deg` (plus, presumably,
-  some time-window logic reusing `human_tracking`'s per-identity state) into
-  an actual awareness decision is future work, not started here.
+- **No notion of what "aware" means here** - this node produces the angle.
+  Awareness over time is `human_awareness`, built on `human_gaze`'s
+  `sees_robot` (see `docs/context/awareness.md`).
 - **Gaze/iris (L2CS-Net + MediaPipe) and environment context (SigLIP2 +
   CBM)** from the design doc are entirely separate, not-yet-started logical
   parts - not a gap in this package specifically, just scope not reached yet.

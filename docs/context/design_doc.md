@@ -14,11 +14,13 @@ means something to a reader who doesn't have that Downloads folder.
 **This describes the target design, not current state.** Only a slice of
 it is built - `human_perception` + `human_tracking` (this doc's "A ·
 Detecție + tracking"), `human_head_pose` ("B1 · Orientarea capului"), and
-`human_gaze` ("B2 · Iris și privire", both phases). The environment stage
-("C · Mediu") and the final per-ID aggregation ("D · Agregare") are not
-started - nothing in `src/` implements them yet. Where a built part's own
-context file (`bbox_keypoints.md`, `human_tracking.md`, `head_pose.md`,
-`gaze.md`) already documents the actual implementation decisions and
+`human_gaze` ("B2 · Iris și privire", both phases), and the awareness
+dimension of the per-ID aggregation ("D · Agregare"; `human_awareness`).
+The environment stage ("C · Mediu") and the rest of D (availability,
+willingness, the combined cooperation score) are not started. Where a built
+part's own context file (`bbox_keypoints.md`, `human_tracking.md`,
+`head_pose.md`, `gaze.md`, `awareness.md`) already documents the actual
+implementation decisions and
 real-footage validation, this file isn't a replacement for that - it's
 the earlier, broader survey those decisions were drawn from (the full set
 of candidates considered, not just the one picked).
