@@ -78,6 +78,18 @@ def _eye_aspect_ratio(points: list[tuple[float, float]]) -> float:
     return vertical / (2.0 * horizontal)
 
 
+def _iris_position_between_corners(
+    iris: tuple[float, float], corner_a: tuple[float, float], corner_b: tuple[float, float]
+) -> float | None:
+    """0 at the eye's image-left corner, 1 at its image-right corner, ~0.5 when centred."""
+    (left_x, left_y), (right_x, right_y) = sorted((corner_a, corner_b))
+    dx, dy = right_x - left_x, right_y - left_y
+    length_sq = dx * dx + dy * dy
+    if length_sq <= 0:
+        return None
+    return ((iris[0] - left_x) * dx + (iris[1] - left_y) * dy) / length_sq
+
+
 @dataclass
 class EyeGazeGateResult:
     """Everything downstream (the gaze model, the fixation/filter stage)
@@ -95,6 +107,9 @@ class EyeGazeGateResult:
     # coordinates.
     right_iris_xy: tuple[float, float] | None = None
     left_iris_xy: tuple[float, float] | None = None
+    # Mean of both eyes' _iris_position_between_corners. Set whenever landmarks exist,
+    # even if gating failed - the iris-position veto works below min_eye_px.
+    iris_horiz_pos: float | None = None
 
 
 class MediaPipeGate:
@@ -150,6 +165,14 @@ class MediaPipeGate:
 
         right_iris = (landmarks[_RIGHT_EYE_IRIS_CENTER].x * w, landmarks[_RIGHT_EYE_IRIS_CENTER].y * h)
         left_iris = (landmarks[_LEFT_EYE_IRIS_CENTER].x * w, landmarks[_LEFT_EYE_IRIS_CENTER].y * h)
+        iris_positions = [
+            p for p in (
+                _iris_position_between_corners(right_iris, right_eye_pts[0], right_eye_pts[3]),
+                _iris_position_between_corners(left_iris, left_eye_pts[0], left_eye_pts[3]),
+            )
+            if p is not None
+        ]
+        iris_horiz_pos = sum(iris_positions) / len(iris_positions) if iris_positions else None
 
         eye_region = head_crop_bgr[
             max(0, int(min(ys))) : min(h, int(max(ys))),
@@ -179,4 +202,5 @@ class MediaPipeGate:
             blur_score=blur_score,
             right_iris_xy=right_iris,
             left_iris_xy=left_iris,
+            iris_horiz_pos=iris_horiz_pos,
         )

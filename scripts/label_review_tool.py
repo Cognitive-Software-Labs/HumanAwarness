@@ -30,12 +30,14 @@ Keys:
                        frame into a new person_id (use this when the
                        tracker fused two different real people under one
                        track_id, i.e. a false merge)
-    s                  save labels now (also auto-saved on quit)
+    s                  save labels now (also auto-saved on any exit: q/Esc,
+                       closing the window, or the process being terminated)
     h                  toggle help overlay
     q/Esc              save and quit
 """
 
 import argparse
+import signal
 import sys
 from pathlib import Path
 
@@ -214,6 +216,14 @@ def main():
     cv2.namedWindow(WINDOW)
     cv2.setMouseCallback(WINDOW, on_mouse)
 
+    # A plain SIGTERM/SIGHUP would otherwise kill the process without running
+    # the finally block below, silently discarding everything since the last 's'.
+    def exit_on_signal(_signum, _frame):
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, exit_on_signal)
+    signal.signal(signal.SIGHUP, exit_on_signal)
+
     show_help = False
     current_cap_frame = -1  # force an initial seek
     frame_img = None
@@ -242,17 +252,17 @@ def main():
             # mean a click's effect (selection highlight) doesn't appear
             # until some unrelated key is pressed afterward.
             key = cv2.waitKeyEx(30)
+            if cv2.getWindowProperty(WINDOW, cv2.WND_PROP_VISIBLE) < 1:
+                break  # closed with the window's X button
             if key == -1:
                 continue
             key_low = key & 0xFF
 
             if key_low in (27, ord("q")):
-                labels.save(labels_path)
-                print(f"Saved labels -> {labels_path}")
                 break
             elif key_low == ord("s"):
                 labels.save(labels_path)
-                print(f"Saved labels -> {labels_path}")
+                print(f"Saved labels -> {labels_path}", flush=True)
             elif key_low == ord("h"):
                 show_help = not show_help
             elif key in (65363, 2555904, 83) or key_low == ord("d"):  # right arrow (X11/Windows) or 'd'
@@ -291,6 +301,8 @@ def main():
                     if not labels.split_segment(state["selected"], frame_idx, new_id):
                         print("Can't split here (frame is already a segment start).")
     finally:
+        labels.save(labels_path)
+        print(f"Saved labels -> {labels_path}", flush=True)
         cap.release()
         cv2.destroyAllWindows()
 

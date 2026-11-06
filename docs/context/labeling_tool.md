@@ -126,11 +126,31 @@ at precision 0.779 / recall 0.939 - the best F1 of every variant tried,
 confirming `head_only_extra_deg` really is the right knob for this gap
 (as `docs/context/gaze.md`'s own design-decisions section already expected
 it to be), just defaulted too conservatively for real handheld footage.
+**Promoted to `test_tracking_and_head_pose_on_video.py`'s own
+`--head-only-extra-deg` default** (was 10.0, matching the full gaze/iris
+pipeline's separately-tuned value) - the two scripts cover different
+scenarios (head-only vs. iris-available) and don't need the same default.
+The full gaze/iris pipeline's `head_only_extra_deg=10.0`
+(`human_gaze/gaze_node.py`, `config/human_gaze.yaml`) is untouched - it was
+tuned against different evidence (see `docs/context/gaze.md`'s "Empirical
+validation") and this finding doesn't bear on it.
 
 None of this is a finished calibration - one person, one clip, one
 `camera_hfov_deg`/`camera_height_m` guess. It's the first real evidence
 that the gap exists and roughly how big the fix needs to be, which is
 exactly what labeling against real footage was supposed to surface.
+
+Labeling the other two people in the same clip (tracks 2 and 4, plus a
+brief track 5) exposed a different failure: overall precision 0.60, and
+0.38 for the man (track 2), whose 271 false positives were nearly all head
+toward the camera with eyes clearly turned to the side - invisible to head
+pose. The full iris pipeline didn't help (MobileGaze barely engaged: eyes
+too small, then too jittery to fixate). Recording iris landmarks on every
+labeled frame showed that where the iris sits between the eye corners
+separates the two cases well even at ~11px eye width, which became the
+iris-position veto (`docs/context/gaze.md`, "Iris-position veto"): end to
+end, precision 0.60 -> 0.83, recall 0.88 -> 0.86. Fitted on this clip
+only - a second labeled clip is the real test.
 
 ## Not done yet
 

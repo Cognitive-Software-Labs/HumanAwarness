@@ -1,11 +1,12 @@
 """Orchestrates one tracked person's gaze estimate for one frame: re-derive
 the same head crop B1 (human_head_pose) uses -> gate with MediaPipe ->
 MobileGaze -> plausibility check against head pose -> fixation -> One Euro
--> fuse with head pose into a final angle -> phase-2 geometric decision
-(docs/context/gaze.md). One `GazePipeline` instance is shared across all
-tracked people; per-track state (fixation, smoothing) lives in dicts keyed
-by `track_id`, pruned when a track is no longer published at all (not just
-momentarily lost - see `prune`).
+-> fuse with head pose into a final angle -> phase-2 geometric decision ->
+iris-position veto on head-only decisions (docs/context/gaze.md). One
+`GazePipeline` instance is shared across all tracked people; per-track state
+(fixation, smoothing) lives in dicts keyed by `track_id`, pruned when a
+track is no longer published at all (not just momentarily lost - see
+`prune`).
 
 Why the head crop is re-derived here rather than reused from B1 directly:
 human_head_pose's own output message doesn't carry the crop image, only the
@@ -24,7 +25,7 @@ it still produces a `sees_robot`/`direct_contact` call even on frames where
 iris gating failed outright, same as the flat angle already does.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
@@ -59,6 +60,8 @@ class GazeTrackResult:
     iris_yaw_deg: float = 0.0  # fixation-confirmed, filtered iris yaw - raw, NOT bearing-corrected; 0 if not fixating
     face_bbox_xyxy: tuple[float, float, float, float] | None = None  # frame-absolute, for display
     geometric: GeometricGazeResult | None = None  # phase-2 decision; None if no reference pixel was available at all
+    iris_offset: float | None = None  # eye widths between the iris and where it'd sit looking at the camera; None without face landmarks
+    eyes_averted: bool = False  # head-only frame with iris_offset over the veto limit; geometric sees_robot/direct_contact forced False
 
 
 class GazePipeline:
@@ -89,6 +92,8 @@ class GazePipeline:
         camera_offset_right_m: float = 0.0,
         camera_offset_down_m: float = 0.0,
         camera_offset_forward_m: float = 0.0,
+        iris_veto_max_offset: float = 0.12,
+        iris_shift_per_yaw_deg: float = 0.0027,
     ):
         """`camera_height_m`/`camera_pitch_deg` are placeholders, not a
         real calibration - this project has only ever run against recorded
@@ -119,6 +124,8 @@ class GazePipeline:
         self.head_only_extra_deg = head_only_extra_deg
         self.shoulder_width_prior_m = shoulder_width_prior_m
         self.person_height_prior_m = person_height_prior_m
+        self.iris_veto_max_offset = iris_veto_max_offset
+        self.iris_shift_per_yaw_deg = iris_shift_per_yaw_deg
         self._robot_center_camera_frame = robot_center_camera_frame(
             CameraRobotOffset(camera_offset_right_m, camera_offset_down_m, camera_offset_forward_m)
         )
@@ -220,6 +227,22 @@ class GazePipeline:
             head_only_extra_deg=self.head_only_extra_deg,
         )
 
+    def _apply_iris_veto(
+        self, result: GazeTrackResult, iris_horiz_pos: float | None, head_yaw_deg: float
+    ) -> GazeTrackResult:
+        if iris_horiz_pos is None:
+            return result
+        # Looking at the camera with the head turned shifts the iris off-centre by this much.
+        expected_pos = 0.5 + self.iris_shift_per_yaw_deg * head_yaw_deg
+        result.iris_offset = abs(iris_horiz_pos - expected_pos)
+        # An iris-sourced decision already reflects the eyes; only head-only ones are blind to them.
+        if result.source != SOURCE_HEAD or result.iris_offset <= self.iris_veto_max_offset:
+            return result
+        result.eyes_averted = True
+        if result.geometric is not None:
+            result.geometric = replace(result.geometric, sees_robot=False, direct_contact=False)
+        return result
+
     def process_track(
         self,
         track_id: int,
@@ -278,9 +301,12 @@ class GazePipeline:
         if not gate_result.passed:
             fixation_tracker.update(None, timestamp_s)
             fused = fuse(head_yaw_deg, bearing, None, False, self.max_eye_head_deg)
-            return GazeTrackResult(
-                fused.gaze_robot_deg, fused.source, False, False, gate_result.reason,
-                geometric=geometric(head_yaw_deg, head_pitch_deg, fused.source),
+            return self._apply_iris_veto(
+                GazeTrackResult(
+                    fused.gaze_robot_deg, fused.source, False, False, gate_result.reason,
+                    geometric=geometric(head_yaw_deg, head_pitch_deg, fused.source),
+                ),
+                gate_result.iris_horiz_pos, head_yaw_deg,
             )
 
         face_bbox_frame = crop_relative_to_frame_xyxy(gate_result.face_bbox_xyxy, head_crop_bbox)
@@ -289,9 +315,12 @@ class GazePipeline:
         if gaze_result is None:
             fixation_tracker.update(None, timestamp_s)
             fused = fuse(head_yaw_deg, bearing, None, False, self.max_eye_head_deg)
-            return GazeTrackResult(
-                fused.gaze_robot_deg, fused.source, False, False, "empty face crop",
-                geometric=geometric(head_yaw_deg, head_pitch_deg, fused.source),
+            return self._apply_iris_veto(
+                GazeTrackResult(
+                    fused.gaze_robot_deg, fused.source, False, False, "empty face crop",
+                    geometric=geometric(head_yaw_deg, head_pitch_deg, fused.source),
+                ),
+                gate_result.iris_horiz_pos, head_yaw_deg,
             )
 
         iris_yaw_deg, iris_pitch_deg = gaze_result
@@ -315,13 +344,16 @@ class GazePipeline:
             (filtered_iris_yaw_deg, filtered_iris_pitch_deg) if fused.source != SOURCE_HEAD
             else (head_yaw_deg, head_pitch_deg)
         )
-        return GazeTrackResult(
-            fused.gaze_robot_deg,
-            fused.source,
-            True,
-            fixation_state.is_fixating,
-            reason,
-            filtered_iris_yaw_deg if filtered_iris_yaw_deg is not None else 0.0,
-            face_bbox_frame,
-            geometric=geometric(geometric_yaw, geometric_pitch, fused.source),
+        return self._apply_iris_veto(
+            GazeTrackResult(
+                fused.gaze_robot_deg,
+                fused.source,
+                True,
+                fixation_state.is_fixating,
+                reason,
+                filtered_iris_yaw_deg if filtered_iris_yaw_deg is not None else 0.0,
+                face_bbox_frame,
+                geometric=geometric(geometric_yaw, geometric_pitch, fused.source),
+            ),
+            gate_result.iris_horiz_pos, head_yaw_deg,
         )

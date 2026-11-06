@@ -188,6 +188,14 @@ a real robot-sized cone test at the person's estimated distance, replacing
 `gaze_robot_deg`'s flat angle threshold, and accounting for the camera not
 necessarily being mounted exactly at the robot's own center.
 
+When that decision comes from head pose alone, an iris-position check can
+veto it: if the iris sits clearly off to one side of the eye (for the
+person's head turn), `sees_robot`/`direct_contact` are set to false. This
+catches "head toward the camera, eyes looking elsewhere". On the labeled
+test clip it raised precision from 0.60 to 0.83, while recall dropped from
+0.88 to 0.86. Tune or disable it with `iris_veto_max_offset` (0.12;
+`>= 1.0` turns it off) — see `docs/context/gaze.md`'s "Iris-position veto".
+
 Physical rig calibration (camera height/tilt/mounting offset, robot
 radius) lives in its own file, `src/human_gaze/config/robot_rig.yaml` —
 loaded automatically alongside `human_gaze.yaml` by the launch file above,
@@ -485,8 +493,9 @@ current frame looking / not-looking / unsure (held until the next label),
 to correct a false merge (split a track into two person_ids from this
 frame on), `]`/`[`/arrows to navigate, `n`/`N` to jump straight to the next
 disagreement once some labels exist, `e`/`E` to jump to the next track
-appearing/disappearing, `h` for the full key list, `s`/`q` to save. Labels
-are saved to `data/ground_truth/video.labels.json`.
+appearing/disappearing, `h` for the full key list, `s` to save. Labels
+are saved to `data/ground_truth/video.labels.json`, and also on any exit:
+`q`/Esc, closing the window, or the process being terminated.
 
 Once you've labeled some frames (on one video or several), score the
 predictions against them:

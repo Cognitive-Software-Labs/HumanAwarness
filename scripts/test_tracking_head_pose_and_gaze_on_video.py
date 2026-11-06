@@ -92,6 +92,12 @@ def main():
     )
     parser.add_argument("--camera-offset-down-m", type=float, default=0.0)
     parser.add_argument("--camera-offset-forward-m", type=float, default=0.0)
+    parser.add_argument(
+        "--iris-veto-max-offset", type=float, default=0.12,
+        help="veto a head-only 'looking' when the iris sits more than this many eye widths from where it "
+        "would looking at the camera (>= 1.0 disables) - see docs/context/gaze.md",
+    )
+    parser.add_argument("--iris-shift-per-yaw-deg", type=float, default=0.0027)
     parser.add_argument("--output-dir", default="test_output")
     parser.add_argument(
         "--export-jsonl", default=None, metavar="PATH",
@@ -127,6 +133,8 @@ def main():
         camera_offset_right_m=args.camera_offset_right_m,
         camera_offset_down_m=args.camera_offset_down_m,
         camera_offset_forward_m=args.camera_offset_forward_m,
+        iris_veto_max_offset=args.iris_veto_max_offset,
+        iris_shift_per_yaw_deg=args.iris_shift_per_yaw_deg,
     )
     tracker = Tracker(reid_threshold=args.reid_threshold)
 
@@ -153,6 +161,7 @@ def main():
     fixating_frames = 0
     sees_robot_frames = 0
     direct_contact_frames = 0
+    eyes_averted_frames = 0
     for result in stream:
         frame = result.orig_img
         detections = yolo_result_to_detections(result, reid_embedder)
@@ -197,7 +206,8 @@ def main():
                         "head_yaw_deg": None, "head_pitch_deg": None, "bearing_deg": None,
                         "head_only_gaze_robot_deg": None, "gaze_robot_deg": None, "gaze_source": None,
                         "iris_fixating": False, "distance_m": None,
-                        "sees_robot": False, "direct_contact": False, "is_looking": False,
+                        "sees_robot": False, "direct_contact": False,
+                        "iris_offset": None, "eyes_averted": False, "is_looking": False,
                     }) + "\n")
                 continue
 
@@ -224,6 +234,8 @@ def main():
                     fx1, fy1, fx2, fy2 = (int(v) for v in gaze_result.face_bbox_xyxy)
                     cv2.rectangle(annotated, (fx1, fy1), (fx2, fy2), FACE_CROP_COLOR, 2)
                 geometric = gaze_result.geometric
+                iris_offset = gaze_result.iris_offset
+                eyes_averted = gaze_result.eyes_averted
             else:
                 # LOST_KALMAN: no fresh crop this frame, so no new gaze
                 # attempt either - head-only fallback only, same reasoning
@@ -232,6 +244,8 @@ def main():
                 source = "head"
                 iris_fixating = False
                 geometric = None
+                iris_offset = None
+                eyes_averted = False
 
             sees_robot = geometric is not None and geometric.sees_robot
             direct_contact = geometric is not None and geometric.direct_contact
@@ -241,15 +255,18 @@ def main():
             # strictly more accurate than the flat phase-1 threshold, which
             # is only a fallback for frames where phase 2 couldn't run at
             # all (no confident reference pixel/distance this frame).
-            is_looking = sees_robot if has_geometric else abs(gaze) <= args.aware_threshold_deg
+            # The veto already cleared sees_robot; this also covers the flat fallback.
+            is_looking = (sees_robot if has_geometric else abs(gaze) <= args.aware_threshold_deg) and not eyes_averted
             if is_looking:
                 looking_frames += 1
             if sees_robot:
                 sees_robot_frames += 1
             if direct_contact:
                 direct_contact_frames += 1
+            if eyes_averted:
+                eyes_averted_frames += 1
 
-            label = "LOOKING AT ROBOT" if is_looking else "NOT LOOKING"
+            label = "LOOKING AT ROBOT" if is_looking else ("NOT LOOKING (eyes away)" if eyes_averted else "NOT LOOKING")
             color = LOOKING_COLOR if is_looking else NOT_LOOKING_COLOR
             cv2.putText(annotated, label, (x1, max(y1 - 58, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
 
@@ -262,7 +279,8 @@ def main():
                     "head_only_gaze_robot_deg": head_only_gaze, "gaze_robot_deg": gaze, "gaze_source": source,
                     "iris_fixating": iris_fixating,
                     "distance_m": geometric.distance_m if geometric is not None else None,
-                    "sees_robot": sees_robot, "direct_contact": direct_contact, "is_looking": is_looking,
+                    "sees_robot": sees_robot, "direct_contact": direct_contact,
+                    "iris_offset": iris_offset, "eyes_averted": eyes_averted, "is_looking": is_looking,
                 }) + "\n")
 
         writer.write(annotated)
@@ -280,6 +298,7 @@ def main():
         f"else the flat phase-1 |gaze| <= {args.aware_threshold_deg}deg fallback): {looking_frames}"
     )
     print(f"sees_robot: {sees_robot_frames}, direct_contact: {direct_contact_frames}")
+    print(f"Head-only frames with eyes judged averted (iris-position veto): {eyes_averted_frames}")
     print(f"-> {out_path}")
 
 

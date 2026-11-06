@@ -122,9 +122,12 @@ def main():
     parser.add_argument("--theta-contact-deg", type=float, default=12.0)
     parser.add_argument("--peripheral-buffer-deg", type=float, default=5.0)
     parser.add_argument(
-        "--head-only-extra-deg", type=float, default=10.0,
+        "--head-only-extra-deg", type=float, default=35.0,
         help="widens sees_robot only (not direct_contact) - this script is always head-only (no "
-        "iris), so this always applies when a geometric decision fires at all",
+        "iris), so this always applies when a geometric decision fires at all. Raised from 10.0 "
+        "(the full gaze/iris pipeline's default) to 35.0 - real-footage labeling found 10.0 too "
+        "tight for head-only noise (recall 0.287), 35.0 best F1 (~0.85); see "
+        "docs/context/labeling_tool.md's 'Validating against real footage'",
     )
     parser.add_argument("--shoulder-width-prior-m", type=float, default=0.40)
     parser.add_argument("--person-height-prior-m", type=float, default=1.70)
@@ -243,7 +246,8 @@ def main():
                         "head_yaw_deg": None, "head_pitch_deg": None, "bearing_deg": None,
                         "head_only_gaze_robot_deg": None, "gaze_robot_deg": None, "gaze_source": None,
                         "iris_fixating": False, "distance_m": None,
-                        "sees_robot": False, "direct_contact": False, "is_looking": False,
+                        "sees_robot": False, "direct_contact": False,
+                        "iris_offset": None, "eyes_averted": False, "is_looking": False,
                     }) + "\n")
                 continue
 
@@ -305,7 +309,8 @@ def main():
                     "head_yaw_deg": yaw, "head_pitch_deg": pitch, "bearing_deg": bearing,
                     "head_only_gaze_robot_deg": gaze, "gaze_robot_deg": gaze, "gaze_source": "head",
                     "iris_fixating": False, "distance_m": distance_m,
-                    "sees_robot": sees_robot, "direct_contact": direct_contact, "is_looking": is_looking,
+                    "sees_robot": sees_robot, "direct_contact": direct_contact,
+                    "iris_offset": None, "eyes_averted": False, "is_looking": is_looking,
                 }) + "\n")
 
         writer.write(annotated)

@@ -33,3 +33,6 @@ gaze_node:
     head_only_extra_deg: 10.0  # design doc's default (15.0) was measured too lenient on real close-range footage - see docs/context/gaze.md
     shoulder_width_prior_m: 0.40
     person_height_prior_m: 1.70
+    # Iris-position veto on head-only decisions - fitted on one labeled clip, see docs/context/gaze.md.
+    iris_veto_max_offset: 0.12  # set >= 1.0 to disable
+    iris_shift_per_yaw_deg: 0.0027

@@ -70,6 +70,8 @@ class GazeNode(Node):
         self.declare_parameter("camera_offset_right_m", 0.0)
         self.declare_parameter("camera_offset_down_m", 0.0)
         self.declare_parameter("camera_offset_forward_m", 0.0)
+        self.declare_parameter("iris_veto_max_offset", 0.12)
+        self.declare_parameter("iris_shift_per_yaw_deg", 0.0027)
 
         image_topic = self.get_parameter("image_topic").value
         detections_topic = self.get_parameter("detections_topic").value
@@ -109,6 +111,8 @@ class GazeNode(Node):
             camera_offset_right_m=self.get_parameter("camera_offset_right_m").value,
             camera_offset_down_m=self.get_parameter("camera_offset_down_m").value,
             camera_offset_forward_m=self.get_parameter("camera_offset_forward_m").value,
+            iris_veto_max_offset=self.get_parameter("iris_veto_max_offset").value,
+            iris_shift_per_yaw_deg=self.get_parameter("iris_shift_per_yaw_deg").value,
         )
 
         self.bridge = CvBridge()

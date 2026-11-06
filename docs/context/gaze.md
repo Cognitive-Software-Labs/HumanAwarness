@@ -244,6 +244,74 @@ is all project-owned geometry:
   deployment-independent and already verified against hand-computed
   expected values (see "Empirical validation").
 
+### Iris-position veto on head-only decisions
+
+Head pose alone can't tell "head toward the camera, eyes looking elsewhere"
+apart from real looking. On the manually labeled WhatsApp clip
+(`data/ground_truth/whatsapp_1017_headpose.*`, see `labeling_tool.md`) that
+case was 271 of the man's (track 2) false positives - head yaw within a few
+degrees of the camera, eyes turned clearly to the side. MobileGaze couldn't
+fix it: his eyes are under `min_eye_px` (12px) in 445 of 647 frames, and
+even with the floor lowered to 8px every one of his 379 MobileGaze readings
+then failed fixation (the reading jitters more than `fixation_max_dev_deg`
+at that size). A yes/no "are the eyes aimed at the camera" check doesn't
+need fixation-level precision, so it's done separately:
+
+- `mediapipe_gate` reports `iris_horiz_pos`: where the iris sits on the line
+  between the eye's two corners (0 = image-left corner, 1 = image-right,
+  ~0.5 centred), averaged over both eyes. Set whenever MediaPipe found a
+  face, even on frames the gate otherwise rejects - the veto is not bound by
+  `min_eye_px`.
+- `gaze_pipeline._apply_iris_veto`: someone looking at the camera with their
+  head turned by `yaw` degrees has their iris near
+  `0.5 + iris_shift_per_yaw_deg * yaw`. On a frame whose fused source is
+  head-only, an iris more than `iris_veto_max_offset` eye widths from that
+  sets `eyes_averted` and forces the geometric `sees_robot`/`direct_contact`
+  to False (`dataclasses.replace`, so `gaze_node` publishes the vetoed
+  decision with no message change). Iris-sourced frames are left alone -
+  MobileGaze already accounted for the eyes there. `gaze_robot_deg` (the
+  angle) is never touched; a consumer that thresholds that angle itself
+  doesn't get the veto.
+
+Choices, each from the same labeled data (iris landmarks recorded on every
+labeled frame where MediaPipe found a face - 893 of them):
+
+- **Correct for head turn with the raw head-pose yaw, not `yaw - bearing`.**
+  The slope fitted against `yaw - bearing` came out ~0 and vetoed no more
+  than no correction at all (207 vs 211 of 317 false positives at the same
+  threshold); raw yaw vetoed 246. Consistent with 6DRepNet360 reading yaw
+  from the face's appearance, i.e. relative to the viewing ray. The slope's
+  sign is tied to `HeadPoseEstimator`'s yaw sign and the image-left-to-right
+  corner ordering; `head_pose_node` passes that yaw through unchanged.
+- **Centre fixed at 0.5, only the slope fitted** (0.0027 per degree). A
+  fitted centre (0.494) gained nothing.
+- **Leave-one-person-out** (fit the slope on two people, test on the third,
+  threshold 0.12): 248 of 317 head-pose false positives vetoed, 7 of 509 true
+  "looking" frames wrongly vetoed - holds across these three people, not
+  just in-sample.
+- **No extra eye-size floor.** It works from 8px eyes up; below 8px (17
+  frames) it never fired. `mp_min_head_px` already keeps eyes at 7px or more
+  on this footage.
+- **Applies on blink frames too.** Noisier there (3 of the 9 wrong vetoes
+  came from 109 blink frames) but still net positive (17 false positives
+  removed).
+- **No "eyes closed means not looking" rule.** On this clip the not-looking
+  frames had slightly *more* open eyes than the looking ones for two of the
+  three people, and nobody closed their eyes for long - no evidence for it
+  yet.
+
+End to end on the same clip (full pipeline, `head_only_extra_deg=35`,
+scored against all three people's labels):
+
+| | precision | recall | F1 | false positives |
+|---|---|---|---|---|
+| veto off (`iris_veto_max_offset` >= 1.0) | 0.60 | 0.88 | 0.71 | 351 |
+| veto on (0.12) | 0.83 | 0.86 | 0.85 | 105 |
+| man (track 2), off -> on | 0.38 -> 0.79 | 0.93 -> 0.91 | 0.54 -> 0.84 | 271 -> 44 |
+
+With the veto off the export is identical, row for row, to the run before
+it existed.
+
 ## Interfaces
 
 Reuses `human_awareness_msgs/PersonDetection` a fourth time, extending it
@@ -481,6 +549,8 @@ extensions):
 | `head_only_extra_deg` | 10.0 | extra `sees_robot` slack when the fused source this frame is head-only, not iris - lowered from the design doc's 15.0, see "Empirical validation" |
 | `shoulder_width_prior_m` | 0.40 | distance-estimator fallback tier 2: assumed real shoulder width |
 | `person_height_prior_m` | 1.70 | distance-estimator fallback tier 3 (last resort): assumed real person height |
+| `iris_veto_max_offset` | 0.12 | on a head-only frame, an iris more than this many eye widths from where it'd sit looking at the camera vetoes `sees_robot`/`direct_contact`; >= 1.0 disables - see "Iris-position veto" |
+| `iris_shift_per_yaw_deg` | 0.0027 | how far (in eye widths) the iris sits off-centre per degree of head yaw while still looking at the camera |
 
 Physical rig calibration - same `GazePipeline`/`gaze_node` constructor, but
 sourced from the separate `config/robot_rig.yaml` (not `human_gaze.yaml`),
@@ -498,6 +568,13 @@ decisions: Phase 2" for why these are split out:
 
 ## Not done yet
 
+- **The iris-position veto is fitted and validated on one clip** (three
+  people, one phone camera, indoor light). Leave-one-person-out supports it
+  generalizing across people, but not across cameras, resolutions or
+  lighting - re-score it on a second labeled clip before trusting the
+  numbers above. Per-frame only (no smoothing over time), and
+  `eyes_averted` isn't a field on the ROS message - it only shows up there
+  as `sees_robot`/`direct_contact` being False.
 - **`blur_min` is an unset placeholder** (0.0 - the gate never actually
   rejects anything on blur right now), consistent with the design doc's
   own "calibrat" (calibrated) note rather than a fixed recommended value -

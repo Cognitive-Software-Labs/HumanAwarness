@@ -45,7 +45,8 @@ workspace under `src/`.
 - **iris / gaze relative to the robot** — MediaPipe Face Landmarker gates,
   MobileGaze estimates eye direction, fused with head pose (iris takes
   priority once fixating and plausible) into the final "facing the robot"
-  angle (`human_gaze` package, `gaze_node`). See `docs/context/gaze.md`.
+  angle, plus an iris-position veto on head-only decisions (`human_gaze`
+  package, `gaze_node`). See `docs/context/gaze.md`.
 - **manual labeling / review tool** — frame-by-frame ground-truth labeling
   for the gaze/awareness "looking at the robot" signal (head-pose-only or
   full gaze/iris predictions), scored against exported predictions

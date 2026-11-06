@@ -702,3 +702,16 @@ never left frame.
 - No automated test suite (`ament_copyright`/`ament_flake8`/`ament_pep257`
   are declared as `test_depend` in `package.xml`, matching `human_perception`'s
   convention, but no actual test files exist yet in either package).
+- **No camera-motion compensation (CMC) from odometry.** `docs/context/design_doc.md`
+  ("A · Detection + tracking", `cmc_source: odom`) calls this mandatory for a
+  moving camera: the Kalman motion model here assumes a static camera, so a
+  robot rotation/translation between frames shows up to the tracker as every
+  person having suddenly moved, degrading the IoU/Kalman motion match exactly
+  when the robot itself is moving - the scenario this project exists for.
+  `Tracker` has no odometry input at all; nothing here subscribes to
+  `nav_msgs/Odometry` or warps Kalman predictions by the robot's own
+  delta-yaw. Every clip validated so far (see "Multi-person validation"
+  above) was recorded handheld/stationary-camera-relative-to-the-scene, not
+  from a moving robot base, so this gap hasn't yet shown up as a measured
+  failure - it's an architectural gap confirmed by inspection, not yet
+  exercised against real moving-robot footage.
