@@ -3,7 +3,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from human_awareness.adapters import person_detection_to_cue
+from human_awareness.adapters import (
+    STAMP_ADVANCE,
+    STAMP_REORDERED,
+    STAMP_RESTART,
+    classify_stamp,
+    person_detection_to_cue,
+)
 from human_awareness.awareness import SOURCE_HEAD, SOURCE_IRIS, AwarenessAggregator, AwarenessCue
 
 SEES_HEAD = AwarenessCue(True, SOURCE_HEAD)
@@ -168,3 +174,19 @@ def test_adapter_builds_cue_from_a_fresh_decision():
 )
 def test_adapter_treats_anything_else_as_unknown(overrides):
     assert person_detection_to_cue(_det(**overrides)) is None
+
+
+@pytest.mark.parametrize(
+    "stamp_s, newest_s, expected",
+    [
+        (5.0, None, STAMP_ADVANCE),  # first message
+        (5.0, 5.0, STAMP_ADVANCE),  # same instant again
+        (5.1, 5.0, STAMP_ADVANCE),
+        (4.99, 5.0, STAMP_REORDERED),  # a few ms out of order: skip, don't reset
+        (4.0, 5.0, STAMP_REORDERED),  # exactly restart_jump_s back is still a reorder
+        (3.9, 5.0, STAMP_RESTART),
+        (0.5, 600.0, STAMP_RESTART),  # a looping bag starting over
+    ],
+)
+def test_classify_stamp(stamp_s, newest_s, expected):
+    assert classify_stamp(stamp_s, newest_s, restart_jump_s=1.0) == expected

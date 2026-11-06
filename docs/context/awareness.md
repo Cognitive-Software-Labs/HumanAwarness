@@ -101,8 +101,17 @@ Not seen at all, the value settles back at 0.5 with confidence 0.
 - **Time comes from header stamps, not the node clock.** The result is
   independent of frame rate and of how often `observe` is called (a unit
   test checks 10/30/60 fps give the same values), and a recorded stream
-  replays identically at any speed. A stamp that goes backwards (looping
-  bag, reset simulation) resets all state, with a warning.
+  replays identically at any speed. Three exceptions, decided by
+  `adapters.classify_stamp`:
+  - A message up to 1 s older than the newest one was delivered out of
+    order. It is dropped with a warning, since the newer state already
+    covers that moment.
+  - A jump back of more than 1 s means the source restarted (looping bag,
+    reset simulation). All state is reset, with a warning.
+  - An unset stamp (0) is timed by when the message arrived, with a
+    one-time warning. The upstream nodes keep working on such a stream
+    (they fall back to a nominal frame step), and awareness would
+    otherwise never move.
 - **State lives as long as the tracker publishes the ID.**
   `human_tracking` publishes every live track, `LOST_*` included, in every
   message. The state of a lost person keeps decaying toward "don't know"
@@ -162,12 +171,13 @@ head-only observation clear the design doc's `min_confidence` = 0.3.
 
 ## Empirical validation
 
-- **Unit tests** (`src/human_awareness/test/test_awareness.py`, 26 cases):
+- **Unit tests** (`src/human_awareness/test/test_awareness.py`, 33 cases):
   start at 0.5/0; missing cues never move it off 0.5; rise and fade match
   their time constants; iris counts more than head; a one-frame flicker
   moves it < 0.03; a cue counts for at most `cue_max_age_s`; identical
   results at 10/30/60 fps; state survives LOST and resumes; pruning;
-  out-of-order stamps; the adapter's ACTIVE / head pose / phase-2 rules.
+  out-of-order stamps; the adapter's ACTIVE / head pose / phase-2 rules;
+  in-order / reordered / restart stamp classification.
 - **The labeled WhatsApp clip** (`data/ground_truth/whatsapp_1017_headpose.*`,
   full script, `--reid-device cuda:0 --head-pose-device cuda:0
   --gaze-device cuda:0 --head-only-extra-deg 35`). The labels mean "looking
@@ -212,8 +222,14 @@ head-only observation clear the design doc's `min_confidence` = 0.3.
   published from its first to its last frame, `LOST_GALLERY` while not
   visible (118 such entries). Over all 2001 (frame, track) pairs the node's
   output matches the script's in-process values to 3e-8 (float32). A
-  backward stamp reset everything to 0.5 / 0 with the warning; an
-  untracked detection passed through at 0.5 / 0.
+  22.6 s jump back reset everything to 0.5 / 0 with the warning; an
+  untracked detection passed through at 0.5 / 0. A second run checked the
+  stamp handling:
+  - a message 33 ms older than the newest got no reply, and the next
+    in-order one carried on without a reset;
+  - an 8 s jump back reset the state;
+  - 31 unstamped messages, 1.05 s of `sees_robot`, took a new person from
+    0.5 to 0.82, the same as stamped frames over that time.
 
 ## Not done yet
 

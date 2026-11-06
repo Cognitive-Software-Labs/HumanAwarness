@@ -263,9 +263,11 @@ LOST ones included.
 The state is kept per `track_id` while `human_tracking` still publishes
 it, so it carries on when ReID brings a person back. Time comes from the
 message stamps, so a recorded bag gives the same result at any playback
-speed. See `docs/context/awareness.md` for the model, its parameters
-(`src/human_awareness/config/human_awareness.yaml`) and how it behaves on
-the labeled clip.
+speed. Unstamped input (stamp 0) is timed by arrival instead. A message
+delivered out of order is dropped, and a jump back of more than 1 s (a
+looping bag) resets the state. See `docs/context/awareness.md` for the
+model, its parameters (`src/human_awareness/config/human_awareness.yaml`)
+and how it behaves on the labeled clip.
 
 ```bash
 ros2 run human_awareness awareness_node --ros-args -p tau_awareness_s:=5.0
