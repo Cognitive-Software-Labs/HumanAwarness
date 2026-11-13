@@ -133,6 +133,8 @@ class GazePipeline:
         self._fixation_trackers: dict[int, FixationTracker] = {}
         self._smoothers: dict[int, OneEuroFilter] = {}
         self._pitch_smoothers: dict[int, OneEuroFilter] = {}
+        # Per track: start time of the fixation its two smoothers are following.
+        self._smoothed_fixation_start: dict[int, float] = {}
 
     def _pitch_smoother_for(self, track_id: int) -> OneEuroFilter:
         if track_id not in self._pitch_smoothers:
@@ -156,7 +158,9 @@ class GazePipeline:
         publishes at all - a track that's merely LOST_KALMAN/LOST_GALLERY
         (still alive in human_tracking, just without a fresh crop this
         frame) should still be in `active_track_ids` and keep its state."""
-        for state_dict in (self._fixation_trackers, self._smoothers, self._pitch_smoothers):
+        for state_dict in (
+            self._fixation_trackers, self._smoothers, self._pitch_smoothers, self._smoothed_fixation_start
+        ):
             for track_id in list(state_dict.keys()):
                 if track_id not in active_track_ids:
                     del state_dict[track_id]
@@ -332,6 +336,15 @@ class GazePipeline:
         filtered_iris_yaw_deg = None
         filtered_iris_pitch_deg = 0.0
         if fixation_state.is_fixating:
+            if self._smoothed_fixation_start.get(track_id) != fixation_state.start_ts:
+                # A new fixation (after a saccade or a gap) gets fresh filters
+                # and starts from its own angle. The old ones would pull it
+                # toward the previous fixation's - most of all after a gap,
+                # since dt_seconds is the frame interval, not the time since
+                # they last ran.
+                self._smoothers.pop(track_id, None)
+                self._pitch_smoothers.pop(track_id, None)
+                self._smoothed_fixation_start[track_id] = fixation_state.start_ts
             filtered_iris_yaw_deg = self._smoother_for(track_id).filter(fixation_state.angle_deg, dt_seconds)
             # Pitch isn't part of the fixation decision itself (that's
             # yaw-stability only, matching the design doc) - it rides along,
