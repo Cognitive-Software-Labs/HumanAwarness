@@ -138,10 +138,19 @@ def crop_quality(confidence: float, bbox_xyxy: tuple[float, float, float, float]
 
 class Track:
     _next_id = 1
+    _next_uid = 1
 
     def __init__(self, bbox_xyxy: tuple[float, float, float, float], gallery_size: int = 8):
         self.state = NEW
         self.track_id: int | None = None  # assigned only on NEW -> ACTIVE promotion
+        # Internal identity for every track, NEW ones included (track_id only
+        # exists once confirmed) - what co_visible refers to.
+        self.uid = Track._next_uid
+        Track._next_uid += 1
+        # uids of every other track this one was matched to a separate,
+        # non-overlapping detection in the same frame as - i.e. known to be a
+        # different person (see Tracker's cooccurrence_veto).
+        self.co_visible: set[int] = set()
         self.kalman = KalmanBoxTracker(bbox_xyxy)
         self.gallery_size = gallery_size
         self.gallery: list[GalleryEntry] = []

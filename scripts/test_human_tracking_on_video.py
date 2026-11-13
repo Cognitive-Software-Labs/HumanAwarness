@@ -11,6 +11,7 @@ Usage:
 """
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -141,6 +142,28 @@ def main():
         "ranking (not eligibility) when choosing between multiple already-qualified candidates - 0 "
         "disables it",
     )
+    parser.add_argument(
+        "--cooccurrence-veto",
+        type=int,
+        default=1,
+        help="1 = never reconcile a young track into a lost identity it was ever seen in the same frame "
+        "as (two simultaneously-visible tracks are two different people); 0 disables. See tracker.py",
+    )
+    parser.add_argument(
+        "--cooccurrence-max-overlap",
+        type=float,
+        default=0.5,
+        help="two same-frame tracks only count as co-visible if their boxes overlap less than this "
+        "(intersection over the smaller box) - guards against fragment/duplicate boxes of one person",
+    )
+    parser.add_argument(
+        "--bystander-negative-check",
+        type=int,
+        default=0,
+        help="1 = only revive a lost identity on a detection that resembles it more (by --bystander-margin) "
+        "than any other track visible elsewhere in the same frame; 0 disables. See tracker.py",
+    )
+    parser.add_argument("--bystander-margin", type=float, default=0.0)
     parser.add_argument("--output-dir", default="test_output")
     parser.add_argument(
         "--blackout",
@@ -153,6 +176,13 @@ def main():
             "transitions and ReID recovery without needing footage with a real occlusion "
             "of the right duration."
         ),
+    )
+    parser.add_argument(
+        "--dump-tracks",
+        default=None,
+        metavar="PATH.jsonl",
+        help="write one JSON line per frame with every published track's id/state/bbox (plus the "
+        "cumulative merged-id map), for diffing two runs frame by frame",
     )
     args = parser.parse_args()
 
@@ -185,6 +215,10 @@ def main():
         torso_rescue_weight=args.torso_rescue_weight,
         reconcile_heading_rank_weight=args.reconcile_heading_rank_weight,
         reconcile_orientation_rank_weight=args.reconcile_orientation_rank_weight,
+        cooccurrence_veto=bool(args.cooccurrence_veto),
+        cooccurrence_max_overlap=args.cooccurrence_max_overlap,
+        bystander_negative_check=bool(args.bystander_negative_check),
+        bystander_margin=args.bystander_margin,
     )
 
     input_path = ensure_upright(video_path)
@@ -198,6 +232,7 @@ def main():
     cap.release()
 
     writer = cv2.VideoWriter(str(out_path), cv2.VideoWriter_fourcc(*"avc1"), fps, (width, height))
+    dump_file = open(args.dump_tracks, "w") if args.dump_tracks else None
 
     stream = detector(source=str(input_path), conf=args.conf, imgsz=args.imgsz, stream=True, verbose=False)
 
@@ -212,6 +247,7 @@ def main():
     # was in - a LOST_KALMAN track can also be recovered via ReID fallback
     # (see tracker.py), so the lost state alone isn't a reliable proxy.
     seen_lost: set[int] = set()
+    n_vetoes_seen = 0
 
     for result in stream:
         frame = result.orig_img
@@ -260,10 +296,26 @@ def main():
                 cv2.LINE_AA,
             )
 
+        new_vetoes = tracker.veto_events[n_vetoes_seen:]
+        n_vetoes_seen = len(tracker.veto_events)
+        if dump_file is not None:
+            record = {
+                "vetoes": new_vetoes,
+                "frame": frame_count,
+                "tracks": [
+                    {"id": t.track_id, "state": t.state, "bbox": [round(float(v), 1) for v in t.kalman.bbox]}
+                    for t in published
+                ],
+                "merged": {str(k): v for k, v in tracker.merged_ids.items()},
+            }
+            dump_file.write(json.dumps(record) + "\n")
+
         writer.write(annotated)
         frame_count += 1
 
     writer.release()
+    if dump_file is not None:
+        dump_file.close()
     elapsed = time.time() - t_start
     print(f"Processed {frame_count} frames in {elapsed:.1f}s ({frame_count/elapsed:.1f} fps)")
     # Set difference, not a count subtraction: a merge can in principle land
@@ -280,6 +332,10 @@ def main():
     print(f"Net distinct identities: {len(net_ids)}")
     print(f"Recoveries via motion/IoU re-match: {lost_kalman_recoveries}")
     print(f"Recoveries via ReID (appearance) match: {reid_recoveries}")
+    by_kind: dict[str, int] = {}
+    for ev in tracker.veto_events:
+        by_kind[ev["kind"]] = by_kind.get(ev["kind"], 0) + 1
+    print(f"Bystander vetoes (pair-frames rejected that would otherwise have passed threshold): {by_kind}")
     print(f"-> {out_path}")
 
 
