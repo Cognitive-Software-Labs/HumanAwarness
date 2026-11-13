@@ -22,3 +22,7 @@ human_tracking_node:
     torso_rescue_weight: 0.4
     reconcile_heading_rank_weight: 0.15
     reconcile_orientation_rank_weight: 0.12
+    cooccurrence_veto: true
+    cooccurrence_max_overlap: 0.5
+    bystander_negative_check: false
+    bystander_margin: 0.0

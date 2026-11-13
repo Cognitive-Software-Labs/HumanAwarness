@@ -79,6 +79,10 @@ class HumanTrackingNode(Node):
         self.declare_parameter("torso_rescue_weight", 0.4)
         self.declare_parameter("reconcile_heading_rank_weight", 0.15)
         self.declare_parameter("reconcile_orientation_rank_weight", 0.12)
+        self.declare_parameter("cooccurrence_veto", True)
+        self.declare_parameter("cooccurrence_max_overlap", 0.5)
+        self.declare_parameter("bystander_negative_check", False)
+        self.declare_parameter("bystander_margin", 0.0)
 
         image_topic = self.get_parameter("image_topic").value
         detections_topic = self.get_parameter("detections_topic").value
@@ -107,6 +111,10 @@ class HumanTrackingNode(Node):
             torso_rescue_weight=self.get_parameter("torso_rescue_weight").value,
             reconcile_heading_rank_weight=self.get_parameter("reconcile_heading_rank_weight").value,
             reconcile_orientation_rank_weight=self.get_parameter("reconcile_orientation_rank_weight").value,
+            cooccurrence_veto=self.get_parameter("cooccurrence_veto").value,
+            cooccurrence_max_overlap=self.get_parameter("cooccurrence_max_overlap").value,
+            bystander_negative_check=self.get_parameter("bystander_negative_check").value,
+            bystander_margin=self.get_parameter("bystander_margin").value,
         )
 
         self.bridge = CvBridge()

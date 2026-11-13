@@ -715,3 +715,105 @@ never left frame.
   from a moving robot base, so this gap hasn't yet shown up as a measured
   failure - it's an architectural gap confirmed by inspection, not yet
   exercised against real moving-robot footage.
+
+## Ridgeback idea: bystander negative memory (co-occurrence veto + negative-appearance check)
+
+Ported from the DyNAMO-Ridgeback leader-follower's "non-leader" memory
+(`leader_identity_node.py`): while their leader is verified, every other
+visible track is remembered as *not the leader*, and is only admissible for
+leader recovery later if it looks more like the leader than like its own
+remembered bystander features by a margin. They protect one identity; we
+protect all of them, so it was reformulated into two separate, optional
+constraints in `Tracker` (`tracker.py`):
+
+1. **Co-occurrence veto** (`cooccurrence_veto`, default **on**): every
+   track gets an internal `uid` (NEW tracks included) and a `co_visible`
+   set. At the end of each `update`, every pair of tracks matched to
+   separate detections in that frame records each other as known-different
+   people, unless their boxes overlap by more than `cooccurrence_max_overlap`
+   (0.5, intersection over the smaller box). That skip covers fragment
+   boxes that escaped containment suppression and people mid-crossing.
+   Reconciliation (stage 1.5) may never merge a young track into a lost
+   identity it was ever co-visible with. Such pairs are dropped before the
+   density count, since a provably different track isn't a contender. On a
+   merge, the reclaimed identity inherits the young track's `co_visible`
+   set. This is a hard constraint the tracker didn't have before. It costs
+   no appearance model and no threshold tuning. Stage 2 is untouched,
+   because its candidates are raw detections with no history to compare.
+   The Ridgeback "self-history" soft version (allow the merge if the
+   detection resembles the lost id more than the young track's own past)
+   was not implemented. Our young track's gallery already contains the
+   current detection, so that test would always block. It would also
+   repeat the self-similarity baseline this file already reverted (see
+   `reid_threshold` above).
+2. **Negative-appearance ("bystander") check** (`bystander_negative_check`,
+   default **off**; `bystander_margin` 0.0): a lost identity may only be
+   revived on a detection (stage 1.5 or 2) if that detection scores higher
+   against the lost identity's gallery than against any *other* track
+   visible elsewhere in the same frame (those are certainly not this
+   detection). Unlike the reverted self-similarity baseline, this compares
+   a cross-person score against cross-person scores.
+
+Both are exposed as node/yaml parameters and test-script flags
+(`--cooccurrence-veto`, `--cooccurrence-max-overlap`,
+`--bystander-negative-check`, `--bystander-margin`). Vetoes that rejected an
+otherwise above-threshold pair are logged in `Tracker.veto_events` and
+printed by the test script. The script also gained `--dump-tracks PATH.jsonl`
+(a per-frame id/state/bbox dump, plus the merge map and veto events) for
+diffing runs frame by frame.
+
+**Measured** (8-run protocol; baseline = unchanged code; "veto" = 1 only;
+"veto+neg" = 1 and 2). Each cell is confirmed ids / net identities /
+motion+ReID recoveries:
+
+| run | baseline | veto | veto+neg |
+|---|---|---|---|
+| A | 1 / 1 / 0+1 | identical | identical |
+| B | 2 / 1 / 0+1 | identical | identical |
+| C | 1 / 1 / 1+1 | identical | identical |
+| D | 7 / 4 / 8+5 | identical | 7 / 5 / 9+3 |
+| D `--blackout 150:45` | 7 / 4 / 11+5 | identical | 7 / 5 / 12+3 |
+| D `--blackout 300:90` | 7 / 4 / 8+6 | identical | 7 / 5 / 9+4 |
+| D `--blackout 450:150` | 5 / 4 / 7+4 | identical | identical |
+| C `--blackout 200:120` | 1 / 1 / 1+2 | identical | identical |
+
+- **Co-occurrence veto: never fired.** The per-frame dumps are
+  byte-identical to baseline on all 8 runs. On this footage, no
+  reconciliation candidate was ever co-visible with the identity it tried
+  to rejoin. It is kept on by default because it is neutral here and can
+  only remove merges between tracks that were provably two people at
+  once, the 3-person false-merge shape documented above. It is also
+  covered by synthetic tests.
+  - Known blind spot: if a young track's motion match hops onto another
+    person inside its 1.5 s reconcile window, the veto would block the
+    corrective merge. This hasn't been seen on real footage.
+  - Not yet validated on footage where it actually fires.
+- **Negative check: a confirmed regression, so it stays off.** It fires on
+  one real decision, D f565-570 (also in the f150 and f300 blackout
+  variants). The man in the white tee (id 2) is lost at f552 and reappears
+  as young id 7. Baseline correctly reclaims 7 into 2 at f565
+  (similarity 0.66-0.77). The check vetoes it because his crop scores
+  0.75-0.82 against another visible person's gallery: the woman in a white
+  top, a similar torso.
+  - Knock-on effect: the man stays fragmented as id 7. Then at f571 the
+    still-lost id 2 is falsely reclaimed onto the navy-hoodie woman
+    (baseline id 4) during her brief loss. She keeps the wrong id to the
+    end of the clip.
+  - The check turned one correct recovery into a fragmentation plus an
+    identity swap. It was checked against annotated stills at f540, f562,
+    f567 and f590.
+  - Why it fails: with similarly dressed people, "resembles a visible
+    bystander" is common for genuine reappearances too. A fresh gallery of
+    someone in view right now has a recency advantage over a lost
+    identity's older samples.
+- Tests: `src/human_tracking/test/test_bystander_memory.py` (8 synthetic
+  cases), covering:
+  - the baseline false merge of a lookalike co-visible bystander, and the
+    veto blocking it;
+  - a genuine reappearance still being reconciled;
+  - overlap-guarded recording, symmetric recording, and inheritance on
+    merge;
+  - the stage-2 negative check blocking and not blocking.
+- Caveat: one multi-person clip with about 3 people (P1/P2 nearly
+  throughout, P3 coming and going). "Neutral" for the veto means "never
+  exercised", not "proven helpful".
