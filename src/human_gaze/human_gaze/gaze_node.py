@@ -5,7 +5,10 @@ Net estimeaza" (docs/context/gaze.md).
 Subscribes to a raw camera image and human_head_pose's PersonDetectionArray
 (time-synchronized, same pattern as human_head_pose_node and
 human_tracking_node before it - head pose must already be valid for a
-detection before gaze is attempted at all). Republishes the same message
+detection before gaze is attempted at all, and like head_pose_node it only
+looks at ACTIVE tracks and untracked detections: a LOST_KALMAN/LOST_GALLERY
+track passes through with head_pose_valid=False and its head-pose fields
+zeroed, whatever head pose arrived with it). Republishes the same message
 type again: `gaze_robot_deg` is overwritten with the fused angle whenever
 an iris reading is trusted this frame, and the new iris_* fields record
 which source actually won - see human_awareness_msgs/PersonDetection.msg.
@@ -25,7 +28,7 @@ from sensor_msgs.msg import Image
 
 from human_awareness_msgs.msg import PersonDetectionArray
 from human_gaze.gaze_pipeline import GazePipeline
-from human_head_pose.adapters import person_detection_to_bbox_keypoints
+from human_head_pose.adapters import has_fresh_keypoints, person_detection_to_bbox_keypoints
 
 
 def _stamp_to_seconds(stamp) -> float:
@@ -145,9 +148,20 @@ class GazeNode(Node):
         active_track_ids = set()
 
         for det in detections_msg.detections:
+            # LOST tracks too, so they keep their fixation/smoothing state
+            # (see GazePipeline.prune), even though they're skipped below.
             if det.track_id >= 0:
                 active_track_ids.add(det.track_id)
 
+            # A LOST_* track's keypoints aren't from this frame (see
+            # has_fresh_keypoints): no gaze from them, and no head pose
+            # either, whatever the input carries (it may be a bag, or come
+            # from something other than head_pose_node). Cleared to zero, as
+            # PersonDetection.msg defines an invalid head pose.
+            if not has_fresh_keypoints(det):
+                det.head_pose_valid = False
+                det.head_yaw_deg = det.head_pitch_deg = det.head_roll_deg = 0.0
+                det.bearing_deg = det.gaze_robot_deg = 0.0
             if not det.head_pose_valid:
                 out.detections.append(det)
                 continue

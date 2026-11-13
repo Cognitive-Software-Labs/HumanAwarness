@@ -132,6 +132,21 @@ frame, MobileGaze decides *what angle* if so.
   filter's job is display/fusion stability frame-to-frame *once* a
   fixation is already confirmed trustworthy, not deciding trustworthiness
   itself.
+- **A gap longer than a blink ends a fixation even when nothing was fed
+  during it, and each new fixation starts with fresh One Euro filters.**
+  `gaze_node` and the video script don't call the pipeline at all for a
+  LOST track or a frame without a valid head pose, so `FixationTracker`
+  sees such a gap as missing updates, not `None` readings. It applies
+  `blink_gap_max_ms` to both: a reading more than that after the last one
+  starts a new fixation, which must then hold for `fixation_min_ms` on
+  its own. Before, the old fixation absorbed the reading and counted as
+  held across the gap, so someone coming back from a 3 s occlusion looking
+  roughly where they had been was iris-fixating on their first frame
+  back. The yaw/pitch smoothers restart with each new fixation, after a
+  saccade as well as after a gap. Carried over, they pulled the new
+  fixation toward the previous one's angle (17.4° on the first frame after
+  a 0° -> 20° saccade), since `dt_seconds` is the frame interval, not the
+  time since they last ran.
 - **Iris never partially overrides head pose - it's all-or-nothing per
   frame** (`fusion.fuse`): an iris reading that's gated, estimated, and
   fixating but implausible against head pose (`max_eye_head_deg`) falls
@@ -145,6 +160,22 @@ frame, MobileGaze decides *what angle* if so.
   lives entirely in the phase-2 geometric decision below (`sees_robot`/
   `direct_contact`), not retrofitted into this field, so existing consumers
   of `gaze_robot_deg` see no behavior change from phase 2's addition.
+- **LOST tracks get no gaze, whatever head pose they arrive with.** Like
+  `head_pose_node`, `gaze_node` only processes ACTIVE tracks and untracked
+  detections (`state == ""`). A `LOST_KALMAN`/`LOST_GALLERY` track carries
+  its last match's keypoints, so its head crop, face crop and phase-2
+  reference pixel would all come from wherever the person used to be. It
+  is republished with `head_pose_valid=false` and its head-pose fields
+  zeroed (the "all zero" `PersonDetection.msg` promises for an invalid
+  head pose), every gaze field at its default (`sees_robot=false`,
+  `distance_method=""`), and everything else unchanged. The node checks
+  `state` itself (`human_head_pose.adapters.has_fresh_keypoints`) instead
+  of relying on `head_pose_valid`, so input from an older
+  `head_pose_node`, or a bag recorded before it skipped LOST tracks, can't
+  leak through. A LOST track's fixation/smoothing state is still kept
+  (`prune` gets every published `track_id`), but the gap itself ends its
+  fixation (see the fixation-gap point above). The video script already
+  skipped non-ACTIVE tracks this way.
 
 ### Phase 2: the geometric decision rule
 
@@ -423,6 +454,31 @@ extensions):
   Regression-checked on the first validated clip (24% fixation rate,
   min_eye_px was never the limiting factor there) - unaffected, as
   expected: 43/177, unchanged.
+- **LOST tracks skipped, checked over ROS** (the same in-process run as
+  `head_pose.md`'s: `HeadPoseNode` -> `GazeNode`, synthetic publisher, 5
+  frames of an ACTIVE, a `LOST_KALMAN`, a `LOST_GALLERY` and an untracked
+  detection with identical bbox and keypoints). On `human_gaze/gazes`,
+  ACTIVE and untracked got a phase-2 decision (`ground_plane`); both LOST
+  tracks came out with `head_pose_valid=false`, every gaze field at its
+  default and id/state/bbox/keypoints unchanged. `GazeNode` alone, fed
+  LOST tracks marked `head_pose_valid=true` with a facing head pose (yaw
+  10°): `sees_robot=true` for them before the change, `head_pose_valid=
+  false` with the head-pose fields zeroed, `sees_robot=false` and no
+  phase-2 decision after, while the ACTIVE track with the same input
+  still got `sees_robot=true`.
+- **Fixation across a LOST gap** (scripted iris readings, with MediaPipe
+  and MobileGaze stubbed, through the real `process_track` and through
+  `GazeNode` over ROS): 0.4 s at 10°, 3 s LOST, then 10.5°. Before the
+  fix the first frame back was already fixating and iris-sourced
+  (10.0065° over ROS). Now it's head-only, the new fixation confirms 0.3 s
+  later at exactly 10.5°, and the pitch smoother restarts too. A 0.25 s
+  unfed gap (under `blink_gap_max_ms`) still keeps the fixation. On the
+  labeled WhatsApp clip (full chain, `--head-only-extra-deg 35`) the
+  score is unchanged: precision 0.829 / recall 0.861 (TP 510, FP 105,
+  FN 82). 5 of 2001 export rows differ, all in `gaze_robot_deg`, by at
+  most 2.2°, on iris frames of one person's second and later fixations,
+  where the smoothers now restart. Fixation counts, `sees_robot` and
+  awareness are identical.
 
 ### Empirical validation: phase 1 vs. phase 2
 

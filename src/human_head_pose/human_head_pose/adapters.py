@@ -15,11 +15,30 @@ Two arrows get adapters here:
 - `extract_head_crop`: keypoints + the source frame -> an actual pixel crop
   ready for `HeadPoseEstimator`, combining `head_crop.head_crop_bbox`'s
   geometry with the frame slicing every caller otherwise had to repeat.
+
+Plus `has_fresh_keypoints`, which reads a `PersonDetection`'s `state` to tell
+whether its keypoints are from this frame - what `head_pose_node` and
+`human_gaze`'s `gaze_node` both check before cropping anything.
 """
 
 import numpy as np
 
 from human_head_pose.head_crop import head_crop_bbox
+
+# `PersonDetection.state` values whose keypoints are from this frame: an ACTIVE
+# track (human_tracking matched it to a detection this frame), or "" for an
+# untracked detection straight from human_perception. human_tracking also
+# publishes LOST_KALMAN/LOST_GALLERY tracks, with their last match's keypoints
+# (`Track.last_keypoints`), so a crop from those shows wherever the person used
+# to be, not the person.
+_FRESH_KEYPOINT_STATES = ("ACTIVE", "")
+
+
+def has_fresh_keypoints(detection) -> bool:
+    """Whether a head crop from `detection`'s keypoints shows this person on
+    this frame: True for an ACTIVE track or an untracked detection, False for
+    LOST_KALMAN/LOST_GALLERY (or any other state)."""
+    return detection.state in _FRESH_KEYPOINT_STATES
 
 
 def person_detection_to_bbox_keypoints(
