@@ -101,12 +101,6 @@ class EyeGazeGateResult:
     eye_width_px: float = 0.0
     ear: float = 0.0
     blur_score: float = 0.0
-    # Both unused by the current flat-angle pipeline - kept for the
-    # phase-2 geometric decision rule (docs/context/gaze.md), paired with
-    # adapters.point_relative_to_frame_xy to place the iris in frame
-    # coordinates.
-    right_iris_xy: tuple[float, float] | None = None
-    left_iris_xy: tuple[float, float] | None = None
     # Mean of both eyes' _iris_position_between_corners. Set whenever landmarks exist,
     # even if gating failed - the iris-position veto works below min_eye_px.
     iris_horiz_pos: float | None = None
@@ -200,7 +194,5 @@ class MediaPipeGate:
             eye_width_px=eye_width_px,
             ear=ear,
             blur_score=blur_score,
-            right_iris_xy=right_iris,
-            left_iris_xy=left_iris,
             iris_horiz_pos=iris_horiz_pos,
         )

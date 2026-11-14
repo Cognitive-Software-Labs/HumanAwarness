@@ -249,7 +249,7 @@ head-only observation clear the design doc's `min_confidence` = 0.3.
   evidence.** When `human_tracking` folds a just-created track into an
   older lost identity, the young ID disappears and its state is pruned;
   the old ID carries on with its own decayed state. The tracker records
-  merges (`Tracker.merged_ids`) but doesn't publish them, so the node
+  merges (`Tracker.merged_ids`, kept while the surviving id lives) but doesn't publish them, so the node
   can't transfer the young ID's evidence.
 - **Not run against a live camera or the full ROS chain** (perception →
   tracking → head pose → gaze → awareness), the same gap every other

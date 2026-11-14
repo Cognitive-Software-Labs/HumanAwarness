@@ -23,7 +23,6 @@ class GeometricGazeResult:
     distance_m: float | None  # distance from the PERSON to the ROBOT - not to the camera, once they differ
     distance_method: str  # which tier produced the underlying camera-to-person measurement: "ground_plane" | "shoulder_width" | "height" | "none"
     theta_to_robot_deg: float | None  # angle between the gaze vector and the true direction to the robot
-    robot_cone_deg: float | None  # atan(robot_radius_m / distance_m) at this distance
     sees_robot: bool
     direct_contact: bool
 
@@ -59,14 +58,14 @@ def evaluate(
     contact" shouldn't get easier to claim just because the more precise
     (iris) signal wasn't available this frame."""
     if person_position_camera_frame is None:
-        return GeometricGazeResult(None, distance_method, None, None, False, False)
+        return GeometricGazeResult(None, distance_method, None, False, False)
 
     vector_to_robot = robot_center_camera_frame - person_position_camera_frame
     distance_m = float(np.linalg.norm(vector_to_robot))
     if distance_m <= 0.0:
         # Degenerate (person's estimated position exactly at the robot's
         # center) - can't form a direction, but trivially "sees" it.
-        return GeometricGazeResult(0.0, distance_method, 0.0, 0.0, True, True)
+        return GeometricGazeResult(0.0, distance_method, 0.0, True, True)
 
     direction_to_robot = vector_to_robot / distance_m
     theta_deg = angle_between_deg(gaze_vector, direction_to_robot)
@@ -74,4 +73,4 @@ def evaluate(
     extra_deg = head_only_extra_deg if source == "head" else 0.0
     sees_robot = theta_deg <= cone_deg + peripheral_buffer_deg + extra_deg
     direct_contact = theta_deg <= theta_contact_deg
-    return GeometricGazeResult(distance_m, distance_method, theta_deg, cone_deg, sees_robot, direct_contact)
+    return GeometricGazeResult(distance_m, distance_method, theta_deg, sees_robot, direct_contact)

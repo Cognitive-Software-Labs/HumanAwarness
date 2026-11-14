@@ -247,7 +247,8 @@ def main():
     # was in - a LOST_KALMAN track can also be recovered via ReID fallback
     # (see tracker.py), so the lost state alone isn't a reliable proxy.
     seen_lost: set[int] = set()
-    n_vetoes_seen = 0
+    all_vetoes: list[dict] = []
+    all_merged_ids: dict[int, int] = {}
 
     for result in stream:
         frame = result.orig_img
@@ -296,8 +297,9 @@ def main():
                 cv2.LINE_AA,
             )
 
-        new_vetoes = tracker.veto_events[n_vetoes_seen:]
-        n_vetoes_seen = len(tracker.veto_events)
+        new_vetoes = tracker.veto_events
+        all_vetoes.extend(new_vetoes)
+        all_merged_ids.update(tracker.merged_ids)
         if dump_file is not None:
             record = {
                 "vetoes": new_vetoes,
@@ -306,7 +308,7 @@ def main():
                     {"id": t.track_id, "state": t.state, "bbox": [round(float(v), 1) for v in t.kalman.bbox]}
                     for t in published
                 ],
-                "merged": {str(k): v for k, v in tracker.merged_ids.items()},
+                "merged": {str(k): v for k, v in all_merged_ids.items()},
             }
             dump_file.write(json.dumps(record) + "\n")
 
@@ -324,16 +326,16 @@ def main():
     # merged id was never actually published and was never in
     # ever_active_ids to begin with - subtracting counts would wrongly
     # dock it twice.
-    net_ids = ever_active_ids - set(tracker.merged_ids.keys())
+    net_ids = ever_active_ids - set(all_merged_ids.keys())
     print(f"Distinct track ids ever confirmed: {len(ever_active_ids)}")
     print(
-        f"Of those, later reclaimed by reconciliation (same person, id merged back): {len(tracker.merged_ids)}"
+        f"Of those, later reclaimed by reconciliation (same person, id merged back): {len(all_merged_ids)}"
     )
     print(f"Net distinct identities: {len(net_ids)}")
     print(f"Recoveries via motion/IoU re-match: {lost_kalman_recoveries}")
     print(f"Recoveries via ReID (appearance) match: {reid_recoveries}")
     by_kind: dict[str, int] = {}
-    for ev in tracker.veto_events:
+    for ev in all_vetoes:
         by_kind[ev["kind"]] = by_kind.get(ev["kind"], 0) + 1
     print(f"Bystander vetoes (pair-frames rejected that would otherwise have passed threshold): {by_kind}")
     print(f"-> {out_path}")

@@ -757,7 +757,7 @@ constraints in `Tracker` (`tracker.py`):
 Both are exposed as node/yaml parameters and test-script flags
 (`--cooccurrence-veto`, `--cooccurrence-max-overlap`,
 `--bystander-negative-check`, `--bystander-margin`). Vetoes that rejected an
-otherwise above-threshold pair are logged in `Tracker.veto_events` and
+otherwise above-threshold pair are logged in `Tracker.veto_events` (latest update only) and
 printed by the test script. The script also gained `--dump-tracks PATH.jsonl`
 (a per-frame id/state/bbox dump, plus the merge map and veto events) for
 diffing runs frame by frame.

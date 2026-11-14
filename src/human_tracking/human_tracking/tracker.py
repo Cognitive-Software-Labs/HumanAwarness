@@ -404,15 +404,19 @@ class Tracker:
         self.cooccurrence_max_overlap = cooccurrence_max_overlap
         self.bystander_negative_check = bystander_negative_check
         self.bystander_margin = bystander_margin
-        # Diagnostics: one dict per pair a bystander constraint rejected that
-        # would otherwise have passed the ReID threshold.
+        # Diagnostics from the latest update() only: one dict per pair a
+        # bystander constraint rejected that would otherwise have passed the
+        # ReID threshold. Reset every frame so a long-running node doesn't
+        # accumulate them; a caller wanting a history collects it per frame.
         self.veto_events: list[dict] = []
-        # {abandoned_track_id: surviving_track_id} for every reconciliation
-        # merge so far - a caller that already published `abandoned_track_id`
-        # knows it was retroactively superseded, not actually a separate person.
+        # {abandoned_track_id: surviving_track_id} per reconciliation merge -
+        # a caller that already published `abandoned_track_id` knows it was
+        # retroactively superseded, not actually a separate person. Kept while
+        # the surviving identity is alive, then dropped (bounded memory).
         self.merged_ids: dict[int, int] = {}
 
     def update(self, detections: list[Detection], frame_area: float, dt_seconds: float) -> list[Track]:
+        self.veto_events = []
         detections = suppress_contained_detections(detections, self.containment_suppression_threshold)
 
         for t in self.tracks:
@@ -679,6 +683,8 @@ class Tracker:
             self.tracks.append(new_track)
 
         self.tracks = [t for t in self.tracks if t.is_alive and t not in reconciled_young_tracks]
+        live_ids = {t.track_id for t in self.tracks}
+        self.merged_ids = {a: b for a, b in self.merged_ids.items() if b in live_ids}
         self._record_cooccurrence([t for t in self.tracks if t.seconds_since_last_seen == 0.0])
         return [t for t in self.tracks if t.is_published]
 

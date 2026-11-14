@@ -26,17 +26,6 @@ def crop_relative_to_frame_xyxy(
     return (bx1 + crop_x1, by1 + crop_y1, bx2 + crop_x1, by2 + crop_y1)
 
 
-def point_relative_to_frame_xy(
-    point_in_crop: tuple[float, float],
-    crop_bbox_in_frame: tuple[float, float, float, float],
-) -> tuple[float, float]:
-    """Unused by the current flat-angle pipeline - kept for the phase-2
-    geometric decision rule (docs/context/gaze.md), which will need the
-    iris centers MediaPipeGate already extracts in frame coordinates."""
-    crop_x1, crop_y1, _crop_x2, _crop_y2 = crop_bbox_in_frame
-    return (point_in_crop[0] + crop_x1, point_in_crop[1] + crop_y1)
-
-
 def extract_face_crop(
     frame: np.ndarray,
     face_bbox_in_frame: tuple[float, float, float, float],
