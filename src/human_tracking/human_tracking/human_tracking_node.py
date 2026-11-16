@@ -20,7 +20,7 @@ from sensor_msgs.msg import Image
 
 from human_awareness_msgs.msg import Keypoint2D, PersonDetection, PersonDetectionArray
 from human_tracking.reid_embedder import ReIDEmbedder
-from human_tracking.track import torso_crop_bbox
+from human_tracking.track import EDGE_SIDES_OFF, torso_crop_bbox, touches_image_edge
 from human_tracking.tracker import Detection, Tracker
 
 # Same list, same order, as human_perception's bbox_keypoints_node.py - this
@@ -62,6 +62,8 @@ class HumanTrackingNode(Node):
         self.declare_parameter("tracked_topic", "human_tracking/tracked_detections")
         self.declare_parameter("sync_slop_s", 0.05)
         self.declare_parameter("reid_weights_path", "")
+        self.declare_parameter("reid_model", "osnet_x1_0")
+        self.declare_parameter("reid_normalize", False)
         self.declare_parameter("device", "cpu")
         self.declare_parameter("gallery_size", 8)
         self.declare_parameter("iou_threshold", 0.3)
@@ -83,6 +85,10 @@ class HumanTrackingNode(Node):
         self.declare_parameter("cooccurrence_max_overlap", 0.5)
         self.declare_parameter("bystander_negative_check", False)
         self.declare_parameter("bystander_margin", 0.0)
+        self.declare_parameter("assignment_method", "greedy")
+        self.declare_parameter("edge_embedding_sides", EDGE_SIDES_OFF)
+        self.declare_parameter("edge_embedding_margin_px", 2.0)
+        self.declare_parameter("edge_defers_reconcile_window", True)
 
         image_topic = self.get_parameter("image_topic").value
         detections_topic = self.get_parameter("detections_topic").value
@@ -91,8 +97,13 @@ class HumanTrackingNode(Node):
         reid_weights_path = self.get_parameter("reid_weights_path").value or None
         device = self.get_parameter("device").value
 
-        self.get_logger().info(f"Loading OSNet ReID embedder on device '{device}'")
-        self.embedder = ReIDEmbedder(weights_path=reid_weights_path, device=device)
+        reid_model = self.get_parameter("reid_model").value
+        reid_normalize = self.get_parameter("reid_normalize").value
+
+        self.get_logger().info(f"Loading {reid_model} ReID embedder on device '{device}'")
+        self.embedder = ReIDEmbedder(
+            weights_path=reid_weights_path, device=device, model=reid_model, normalize=reid_normalize
+        )
 
         self.tracker = Tracker(
             gallery_size=self.get_parameter("gallery_size").value,
@@ -115,6 +126,10 @@ class HumanTrackingNode(Node):
             cooccurrence_max_overlap=self.get_parameter("cooccurrence_max_overlap").value,
             bystander_negative_check=self.get_parameter("bystander_negative_check").value,
             bystander_margin=self.get_parameter("bystander_margin").value,
+            assignment_method=self.get_parameter("assignment_method").value,
+            edge_embedding_sides=self.get_parameter("edge_embedding_sides").value,
+            edge_embedding_margin_px=self.get_parameter("edge_embedding_margin_px").value,
+            edge_defers_reconcile_window=self.get_parameter("edge_defers_reconcile_window").value,
         )
 
         self.bridge = CvBridge()
@@ -145,6 +160,7 @@ class HumanTrackingNode(Node):
     def _on_synced_pair(self, image_msg: Image, detections_msg: PersonDetectionArray) -> None:
         frame = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding="bgr8")
         frame_area = frame.shape[0] * frame.shape[1]
+        frame_size = (frame.shape[1], frame.shape[0])
 
         stamp_s = _stamp_to_seconds(image_msg.header.stamp)
         dt_seconds = (stamp_s - self._last_stamp_s) if self._last_stamp_s is not None else (1.0 / 30.0)
@@ -164,8 +180,14 @@ class HumanTrackingNode(Node):
             keypoints = [(kp.x, kp.y, kp.confidence) for kp in det.keypoints]
             dets_meta.append((bbox, det.confidence, keypoints))
 
-            crops.append(frame[max(0, int(y1)) : int(y2), max(0, int(x1)) : int(x2)])
-            torso_bbox = torso_crop_bbox(keypoints, bbox) if keypoints else None
+            # A box cut off by the image border gets no embedding at all (the
+            # tracker would withhold it anyway - see track.touches_image_edge),
+            # which also skips its OSNet forward pass.
+            at_edge = touches_image_edge(
+                bbox, frame_size, self.tracker.edge_embedding_margin_px, self.tracker.edge_embedding_sides
+            )
+            crops.append(None if at_edge else frame[max(0, int(y1)) : int(y2), max(0, int(x1)) : int(x2)])
+            torso_bbox = torso_crop_bbox(keypoints, bbox) if (keypoints and not at_edge) else None
             if torso_bbox is not None:
                 tx1, ty1, tx2, ty2 = torso_bbox
                 torso_crops.append(frame[max(0, int(ty1)) : int(ty2), max(0, int(tx1)) : int(tx2)])
@@ -181,7 +203,9 @@ class HumanTrackingNode(Node):
             for (bbox, conf, kp), emb, temb in zip(dets_meta, embeddings, torso_embeddings)
         ]
 
-        published = self.tracker.update(detections, frame_area=frame_area, dt_seconds=dt_seconds)
+        published = self.tracker.update(
+            detections, frame_area=frame_area, dt_seconds=dt_seconds, frame_size=frame_size
+        )
 
         out = PersonDetectionArray()
         out.header = image_msg.header

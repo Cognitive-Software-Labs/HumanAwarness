@@ -25,8 +25,8 @@ from ultralytics import YOLO
 
 from _video_rotation import ensure_upright
 from _yolo_tracking_adapter import yolo_result_to_detections
-from human_tracking.reid_embedder import ReIDEmbedder
-from human_tracking.track import ACTIVE, LOST_GALLERY, LOST_KALMAN
+from human_tracking.reid_embedder import REID_MODELS, ReIDEmbedder
+from human_tracking.track import ACTIVE, EDGE_SIDES_CHOICES, EDGE_SIDES_OFF, LOST_GALLERY, LOST_KALMAN
 from human_tracking.tracker import Tracker
 
 # Only ACTIVE tracks are ever drawn (see the main loop) - a lost track has
@@ -74,7 +74,18 @@ def main():
         "(e.g. sitting close together) at the cost of more compute; see docs/context/human_tracking.md's "
         "multi-person validation for measured tradeoffs",
     )
-    parser.add_argument("--reid-weights", default=None, help="path to osnet_x1_0 weights (default: ~/.cache)")
+    parser.add_argument(
+        "--reid-model",
+        default="osnet_x1_0",
+        choices=REID_MODELS,
+        help="ReID backbone (both MSMT17-trained) - see human_tracking/reid_embedder.py",
+    )
+    parser.add_argument(
+        "--reid-normalize",
+        action="store_true",
+        help="apply torchreid's ImageNet mean/std input normalization before the ReID model",
+    )
+    parser.add_argument("--reid-weights", default=None, help="path to the --reid-model weights (default: ~/.cache)")
     parser.add_argument("--reid-device", default="cpu", help="e.g. cpu, cuda:0 - device for the OSNet embedder")
     parser.add_argument("--conf", type=float, default=0.5)
     parser.add_argument("--reid-threshold", type=float, default=0.65)
@@ -164,6 +175,39 @@ def main():
         "than any other track visible elsewhere in the same frame; 0 disables. See tracker.py",
     )
     parser.add_argument("--bystander-margin", type=float, default=0.0)
+    parser.add_argument(
+        "--assignment",
+        choices=("greedy", "hungarian"),
+        default="greedy",
+        help="stage-1 motion/IoU assignment: greedy (highest IoU first) or hungarian (maximum total "
+        "IoU) - see tracker.py's optimal_assignment",
+    )
+    parser.add_argument(
+        "--assignment-stats",
+        action="store_true",
+        help="print how often greedy and optimal assignment would disagree per matching stage",
+    )
+    parser.add_argument(
+        "--edge-embedding-sides",
+        choices=EDGE_SIDES_CHOICES,
+        default=EDGE_SIDES_OFF,
+        help="withhold ReID embeddings (no gallery update, no ReID/reconciliation query) for boxes touching "
+        "the image border: 'horizontal' = left/right only, 'all' = also top/bottom, 'off' = never. The box "
+        "is still motion-tracked - see human_tracking/track.py's touches_image_edge",
+    )
+    parser.add_argument(
+        "--edge-embedding-margin-px",
+        type=float,
+        default=2.0,
+        help="a box within this many pixels of a checked image border counts as cut off",
+    )
+    parser.add_argument(
+        "--no-edge-defers-reconcile-window",
+        dest="edge_defers_reconcile_window",
+        action="store_false",
+        help="with the edge gate on, let a young track's reconciliation window run even while it has only "
+        "seen edge-gated crops (by default the window starts once appearance first becomes available)",
+    )
     parser.add_argument("--output-dir", default="test_output")
     parser.add_argument(
         "--blackout",
@@ -199,7 +243,12 @@ def main():
 
     print("Loading detector + ReID embedder...")
     detector = YOLO(args.det_model)
-    embedder = ReIDEmbedder(weights_path=args.reid_weights, device=args.reid_device)
+    embedder = ReIDEmbedder(
+        weights_path=args.reid_weights,
+        device=args.reid_device,
+        model=args.reid_model,
+        normalize=args.reid_normalize,
+    )
 
     tracker = Tracker(
         reid_threshold=args.reid_threshold,
@@ -219,6 +268,11 @@ def main():
         cooccurrence_max_overlap=args.cooccurrence_max_overlap,
         bystander_negative_check=bool(args.bystander_negative_check),
         bystander_margin=args.bystander_margin,
+        assignment_method=args.assignment,
+        collect_assignment_stats=args.assignment_stats,
+        edge_embedding_sides=args.edge_embedding_sides,
+        edge_embedding_margin_px=args.edge_embedding_margin_px,
+        edge_defers_reconcile_window=args.edge_defers_reconcile_window,
     )
 
     input_path = ensure_upright(video_path)
@@ -247,18 +301,27 @@ def main():
     # was in - a LOST_KALMAN track can also be recovered via ReID fallback
     # (see tracker.py), so the lost state alone isn't a reliable proxy.
     seen_lost: set[int] = set()
+    embed_stats: dict = {}
     all_vetoes: list[dict] = []
     all_merged_ids: dict[int, int] = {}
 
     for result in stream:
         frame = result.orig_img
-        detections = yolo_result_to_detections(result, embedder)
+        detections = yolo_result_to_detections(
+            result,
+            embedder,
+            edge_embedding_sides=args.edge_embedding_sides,
+            edge_embedding_margin_px=args.edge_embedding_margin_px,
+            stats=embed_stats,
+        )
 
         in_blackout = blackout_start is not None and blackout_start <= frame_count < blackout_end
         if in_blackout:
             detections = []
 
-        published = tracker.update(detections, frame_area=frame_area, dt_seconds=dt_seconds)
+        published = tracker.update(
+            detections, frame_area=frame_area, dt_seconds=dt_seconds, frame_size=(width, height)
+        )
 
         annotated = frame.copy()
         for t in published:
@@ -334,6 +397,19 @@ def main():
     print(f"Net distinct identities: {len(net_ids)}")
     print(f"Recoveries via motion/IoU re-match: {lost_kalman_recoveries}")
     print(f"Recoveries via ReID (appearance) match: {reid_recoveries}")
+    print(
+        f"Embeddings computed (full + torso crops): {embed_stats.get('crops_embedded', 0)}, "
+        f"detections skipped at image edge: {embed_stats.get('crops_skipped_edge', 0)}"
+    )
+    if tracker.assignment_stats is not None:
+        st = tracker.assignment_stats
+        for stage in ("stage1", "reconcile", "stage2"):
+            print(
+                f"Assignment [{stage}]: frames with candidate pairs {st.get(f'{stage}_calls', 0)}, "
+                f"with a conflict {st.get(f'{stage}_conflicts', 0)}, "
+                f"greedy != optimal {st.get(f'{stage}_differ', 0)}"
+            )
+        print(f"Stage-1 solver time ({args.assignment}): {st.get('stage1_solve_s', 0.0) * 1e3:.1f} ms total")
     by_kind: dict[str, int] = {}
     for ev in all_vetoes:
         by_kind[ev["kind"]] = by_kind.get(ev["kind"], 0) + 1

@@ -86,16 +86,101 @@ matched to separate detections in the same frame are two different people.
   as much means the appearance evidence isn't discriminating.
 """
 
+import time
 from dataclasses import dataclass
 
 import numpy as np
 
 from human_tracking.orientation import UNKNOWN as ORIENTATION_UNKNOWN
 from human_tracking.orientation import estimate_orientation
-from human_tracking.track import ACTIVE, LOST_GALLERY, LOST_KALMAN, NEW, Track, crop_quality, is_plausible_person_crop
+from human_tracking.track import (
+    ACTIVE,
+    EDGE_SIDES_OFF,
+    LOST_GALLERY,
+    LOST_KALMAN,
+    NEW,
+    Track,
+    crop_quality,
+    is_plausible_person_crop,
+    touches_image_edge,
+)
 
 
 _MIN_CONFIDENT_HEADING_SPEED_FRAC = 0.002  # bbox-heights/frame below which a track's last heading is too noisy to trust
+
+
+ASSIGNMENT_GREEDY = "greedy"
+ASSIGNMENT_HUNGARIAN = "hungarian"
+
+
+def greedy_assignment(pairs: list[tuple[float, int, int]]) -> list[tuple[int, int]]:
+    """Take `(score, row, col)` pairs highest-score first, skipping any whose
+    row or column is already taken. Returns `[(row, col), ...]`."""
+    taken_rows: set[int] = set()
+    taken_cols: set[int] = set()
+    out = []
+    for _score, r, c in sorted(pairs, key=lambda p: p[0], reverse=True):
+        if r in taken_rows or c in taken_cols:
+            continue
+        taken_rows.add(r)
+        taken_cols.add(c)
+        out.append((r, c))
+    return out
+
+
+def optimal_assignment(pairs: list[tuple[float, int, int]]) -> list[tuple[int, int]]:
+    """Maximum-total-score one-to-one assignment over the given `(score, row,
+    col)` pairs (only those pairs are allowed - anything absent can never be
+    assigned). Scores must be positive. Solved with
+    `scipy.optimize.linear_sum_assignment` on the negated score matrix, with
+    disallowed cells left at 0 (= "leave unassigned") and filtered out
+    afterwards - the same construction SORT uses. Returns `[(row, col), ...]`
+    in descending score order, so callers that apply matches in order behave
+    like the greedy path does.
+
+    scipy is imported lazily: it's only needed when a caller opts into
+    Hungarian assignment or assignment diagnostics (see Tracker).
+    """
+    if not pairs:
+        return []
+    from scipy.optimize import linear_sum_assignment
+
+    rows = sorted({r for _s, r, _c in pairs})
+    cols = sorted({c for _s, _r, c in pairs})
+    row_idx = {r: i for i, r in enumerate(rows)}
+    col_idx = {c: j for j, c in enumerate(cols)}
+    cost = np.zeros((len(rows), len(cols)))
+    allowed = np.zeros((len(rows), len(cols)), dtype=bool)
+    score = {}
+    for s, r, c in pairs:
+        cost[row_idx[r], col_idx[c]] = -s
+        allowed[row_idx[r], col_idx[c]] = True
+        score[(r, c)] = s
+    ri, ci = linear_sum_assignment(cost)
+    out = [(rows[i], cols[j]) for i, j in zip(ri, ci) if allowed[i, j]]
+    out.sort(key=lambda rc: score[rc], reverse=True)
+    return out
+
+
+def _has_conflict(pairs: list[tuple[float, int, int]]) -> bool:
+    """True if any row or column appears in more than one pair - the only
+    situation where greedy and optimal assignment *can* disagree."""
+    rows = [r for _s, r, _c in pairs]
+    cols = [c for _s, _r, c in pairs]
+    return len(set(rows)) < len(rows) or len(set(cols)) < len(cols)
+
+
+def _record_assignment_diff(stats: dict | None, prefix: str, pairs: list[tuple[float, int, int]]) -> None:
+    """Diagnostics only: count how often greedy and optimal assignment would
+    pick different matchings for this set of candidate pairs."""
+    if stats is None or not pairs:
+        return
+    stats[f"{prefix}_calls"] = stats.get(f"{prefix}_calls", 0) + 1
+    if not _has_conflict(pairs):
+        return
+    stats[f"{prefix}_conflicts"] = stats.get(f"{prefix}_conflicts", 0) + 1
+    if set(greedy_assignment(pairs)) != set(optimal_assignment(pairs)):
+        stats[f"{prefix}_differ"] = stats.get(f"{prefix}_differ", 0) + 1
 
 
 def _find_reid_matches(
@@ -116,6 +201,8 @@ def _find_reid_matches(
     negative_sims: dict[int, float] | None = None,
     negative_margin: float = 0.0,
     veto_log: list[tuple[str, int, int, float, float]] | None = None,
+    stats: dict | None = None,
+    stats_prefix: str = "reid",
 ) -> dict[int, int]:
     """Greedily match `lost_pool` tracks against `candidates` by appearance
     similarity, gated by a spatial plausibility check (see module docstring)
@@ -161,6 +248,15 @@ def _find_reid_matches(
     beats that by `negative_margin`. Both are logged to `veto_log` as
     `(kind, lost_pool_index, candidate_key, qualify_sim, negative_sim)`
     when they reject a pair that would otherwise have passed the threshold.
+
+    The acceptance loop stays greedy-with-margin even when the tracker uses
+    Hungarian assignment for stage 1 (`Tracker.assignment_method`): optimal
+    assignment can only differ from greedy when some track or candidate has
+    two qualifying partners, and any pair that clears the margin against
+    *every* competitor in its row and column is accepted by greedy too - so
+    whatever Hungarian would add on top is, by construction, a match the
+    margin rule exists to refuse. `stats` (diagnostics only) counts how
+    often that situation arises at all.
     """
     # Pass 1: every spatially-plausible pairing, regardless of similarity -
     # this defines "how many bodies could plausibly be this person" (local
@@ -251,6 +347,9 @@ def _find_reid_matches(
                 continue
         pairs.append((rank_sim, ti, key, eff_margin))
     pairs.sort(key=lambda p: p[0], reverse=True)
+    # rank_sim can be <= 0 in principle (heading term); the shift keeps the
+    # optimal-assignment diagnostic on positive scores without changing order.
+    _record_assignment_diff(stats, stats_prefix, [(p[0] + 2.0, p[1], p[2]) for p in pairs])
 
     matches: dict[int, int] = {}
     resolved_tracks: set[int] = set()
@@ -382,7 +481,14 @@ class Tracker:
         cooccurrence_max_overlap: float = 0.5,
         bystander_negative_check: bool = False,
         bystander_margin: float = 0.0,
+        assignment_method: str = ASSIGNMENT_GREEDY,
+        collect_assignment_stats: bool = False,
+        edge_embedding_sides: str = EDGE_SIDES_OFF,
+        edge_embedding_margin_px: float = 2.0,
+        edge_defers_reconcile_window: bool = True,
     ):
+        if assignment_method not in (ASSIGNMENT_GREEDY, ASSIGNMENT_HUNGARIAN):
+            raise ValueError(f"assignment_method must be '{ASSIGNMENT_GREEDY}' or '{ASSIGNMENT_HUNGARIAN}'")
         self.tracks: list[Track] = []
         self.gallery_size = gallery_size
         self.iou_threshold = iou_threshold
@@ -400,6 +506,28 @@ class Tracker:
         self.torso_rescue_weight = torso_rescue_weight
         self.reconcile_heading_rank_weight = reconcile_heading_rank_weight
         self.reconcile_orientation_rank_weight = reconcile_orientation_rank_weight
+        # Stage 1 (motion/IoU) assignment: "greedy" (highest-IoU pair first)
+        # or "hungarian" (maximum total IoU over all pairs >= iou_threshold).
+        self.assignment_method = assignment_method
+        # Diagnostics only (off by default): per stage, how often greedy and
+        # optimal assignment would disagree, plus stage-1 solver time.
+        self.assignment_stats: dict | None = {} if collect_assignment_stats else None
+        # Edge-crop appearance gate (see track.touches_image_edge): "off",
+        # "horizontal" (left/right borders) or "all" (also top/bottom).
+        self.edge_embedding_sides = edge_embedding_sides
+        self.edge_embedding_margin_px = edge_embedding_margin_px
+        # A person re-entering at the image border often keeps a border-
+        # touching box for well over reconcile_window_s while most of their
+        # body is already visible (close-range handheld footage) - so the gate
+        # above would leave their young track no appearance at all until its
+        # reconciliation window had already closed, permanently fragmenting
+        # the identity. With this on, a young track's reconciliation clock
+        # does not run while it has only ever seen edge-gated crops (empty
+        # gallery): the window starts once appearance first becomes available.
+        self.edge_defers_reconcile_window = edge_defers_reconcile_window
+        # Running count of detections whose (otherwise plausible) embedding
+        # was withheld by the edge gate - diagnostics only.
+        self.edge_gated_detections = 0
         self.cooccurrence_veto = cooccurrence_veto
         self.cooccurrence_max_overlap = cooccurrence_max_overlap
         self.bystander_negative_check = bystander_negative_check
@@ -415,7 +543,16 @@ class Tracker:
         # the surviving identity is alive, then dropped (bounded memory).
         self.merged_ids: dict[int, int] = {}
 
-    def update(self, detections: list[Detection], frame_area: float, dt_seconds: float) -> list[Track]:
+    def update(
+        self,
+        detections: list[Detection],
+        frame_area: float,
+        dt_seconds: float,
+        frame_size: tuple[int, int] | None = None,
+    ) -> list[Track]:
+        """`frame_size` is (width, height) in pixels; it is only needed by the
+        edge-crop appearance gate (`edge_embedding_sides`) - without it, that
+        gate is inactive."""
         self.veto_events = []
         detections = suppress_contained_detections(detections, self.containment_suppression_threshold)
 
@@ -432,12 +569,23 @@ class Tracker:
         # torso-only embedding are gated by the same plausibility check - if
         # the crop as a whole isn't trustworthy, neither reading from it is.
         plausible = [is_plausible_person_crop(d.keypoints, d.bbox_xyxy) for d in detections]
+        # Edge-crop gate: a box cut off by the image border yields
+        # "appearance unavailable" (no gallery update, no ReID/reconciliation
+        # query) - the box itself is still motion-tracked normally. Applied
+        # on top of the plausibility gate, and only to the embeddings: the
+        # orientation read below is still allowed (it never acts alone).
+        at_edge = [
+            touches_image_edge(d.bbox_xyxy, frame_size, self.edge_embedding_margin_px, self.edge_embedding_sides)
+            for d in detections
+        ]
+        self.edge_gated_detections += sum(1 for p, e in zip(plausible, at_edge) if p and e)
+        appearance_ok = [p and not e for p, e in zip(plausible, at_edge)]
         gated_embeddings: list[np.ndarray | None] = [
-            d.embedding if (d.embedding is not None and p) else None for d, p in zip(detections, plausible)
+            d.embedding if (d.embedding is not None and ok) else None for d, ok in zip(detections, appearance_ok)
         ]
         gated_torso_embeddings: list[np.ndarray | None] = [
-            d.torso_embedding if (d.torso_embedding is not None and p) else None
-            for d, p in zip(detections, plausible)
+            d.torso_embedding if (d.torso_embedding is not None and ok) else None
+            for d, ok in zip(detections, appearance_ok)
         ]
         # Same gating: an orientation read off a crop too degraded to trust
         # for ReID at all isn't trustworthy either - UNKNOWN grants no relief.
@@ -455,18 +603,26 @@ class Tracker:
                 iou = compute_iou(t.kalman.bbox, d.bbox_xyxy)
                 if iou >= self.iou_threshold:
                     pairs.append((iou, ti, di))
-        pairs.sort(key=lambda p: p[0], reverse=True)
+        t0 = time.perf_counter()
+        if self.assignment_method == ASSIGNMENT_HUNGARIAN:
+            stage1_matches = optimal_assignment(pairs)
+        else:
+            stage1_matches = greedy_assignment(pairs)
+        if self.assignment_stats is not None:
+            st = self.assignment_stats
+            st["stage1_solve_s"] = st.get("stage1_solve_s", 0.0) + (time.perf_counter() - t0)
+            _record_assignment_diff(st, "stage1", pairs)
 
         matched_track_idx: set[int] = set()
         matched_det_idx: set[int] = set()
         track_to_det: dict[int, int] = {}
-        for _iou, ti, di in pairs:
-            if ti in matched_track_idx or di in matched_det_idx:
-                continue
+        for ti, di in stage1_matches:
             matched_track_idx.add(ti)
             matched_det_idx.add(di)
             track_to_det[ti] = di
             d = detections[di]
+            if self.edge_defers_reconcile_window and at_edge[di] and not motion_tracks[ti].gallery:
+                motion_tracks[ti].edge_wait_seconds += dt_seconds
             quality = crop_quality(d.confidence, d.bbox_xyxy, frame_area)
             motion_tracks[ti].mark_matched(
                 d.bbox_xyxy,
@@ -502,7 +658,7 @@ class Tracker:
                 orientations[di],
             )
             for ti, di in track_to_det.items()
-            if motion_tracks[ti].age_seconds <= self.reconcile_window_s
+            if motion_tracks[ti].age_seconds - motion_tracks[ti].edge_wait_seconds <= self.reconcile_window_s
         ]
         reconcile_blocked: frozenset[tuple[int, int]] = frozenset()
         if self.cooccurrence_veto:
@@ -557,6 +713,8 @@ class Tracker:
             negative_sims=reconcile_negatives,
             negative_margin=self.bystander_margin,
             veto_log=reconcile_veto_log,
+            stats=self.assignment_stats,
+            stats_prefix="reconcile",
         )
         for kind, pi, young_ti, sim, neg in reconcile_veto_log:
             self.veto_events.append(
@@ -627,6 +785,8 @@ class Tracker:
             negative_sims=stage2_negatives,
             negative_margin=self.bystander_margin,
             veto_log=stage2_veto_log,
+            stats=self.assignment_stats,
+            stats_prefix="stage2",
         )
         for kind, pi, _ui, sim, neg in stage2_veto_log:
             self.veto_events.append(

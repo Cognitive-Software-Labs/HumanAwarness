@@ -817,3 +817,125 @@ motion+ReID recoveries:
 - Caveat: one multi-person clip with about 3 people (P1/P2 nearly
   throughout, P3 coming and going). "Neutral" for the veto means "never
   exercised", not "proven helpful".
+
+## Ridgeback ideas: Hungarian assignment, edge-crop embedding skip, OSNet-AIN
+
+The last three of the six DyNAMO-Ridgeback ideas. The three agents that started them
+were stopped part-way. Their code was ported onto the tracker as of the
+co-occurrence veto and dead-code cleanup, then tested together. All three are
+behind parameters that default to today's behaviour.
+
+**Method.** YOLO ran once per clip. Every full/torso crop was embedded with
+four ReID configs (OSNet x1.0 / OSNet-AIN x1.0, each with and without ImageNet
+mean/std normalization). Each variant was then replayed through `Tracker` with
+the test script's bookkeeping. The replay was checked against
+`scripts/test_human_tracking_on_video.py --dump-tracks`: zero per-frame id/state
+mismatches on D and D `--blackout 450:150`. Same 8-run protocol as the other
+Ridgeback sections. Clip D has 3 real people: id 1 = woman in white top/brown
+shorts, id 2 = man in white tee/jeans, id 4 = woman in navy hoodie. Baseline
+(today's defaults) is unchanged from the earlier sections.
+
+### 1. Hungarian assignment (`assignment_method`, default `greedy`)
+
+- Stage 1 (IoU) can use `scipy.optimize.linear_sum_assignment` (max total IoU
+  over pairs ≥ `iou_threshold`) instead of highest-IoU-first. scipy is imported
+  lazily, only when `hungarian` or the diagnostics are on. It is not in
+  `package.xml`, so a ROS deployment that turns this on needs `python3-scipy`.
+- Reconciliation and stage 2 keep greedy-with-margin. Wherever optimal and
+  greedy differ there, some pair has two qualifying partners, and those are
+  exactly the matches the margin rule exists to refuse.
+- `collect_assignment_stats=True` (script: `--assignment-stats`) counts, per
+  stage, how often greedy and optimal would pick different matchings.
+- **Result: identical on all 8 runs, frame for frame.** Clip D has 26 frames
+  where two tracks compete for the same box. Greedy already finds the optimal
+  matching in every one. Reconciliation and stage 2 never disagree. Cost:
+  ~4 µs/frame vs ~1 µs for greedy.
+- Verdict: no effect on our footage. Kept as an option, off.
+- Tests: `test/test_assignment.py`.
+
+### 2. No embeddings for crops cut off at the image edge (`edge_embedding_sides`, default `off`)
+
+- `horizontal` (left/right) or `all` (also top/bottom): a box within
+  `edge_embedding_margin_px` of a checked border gets no embedding. It does
+  not update the gallery and is not used as a ReID/reconciliation query, but
+  it is still motion-tracked.
+- `edge_defers_reconcile_window` (default true): a young track's
+  reconciliation clock doesn't run while it has only seen edge-gated crops.
+  Without it, a person who re-enters at the edge loses the reconciliation
+  window before appearance is ever available.
+- The adapter/node also skip the OSNet forward pass for gated boxes.
+- **Result: a regression.** Our clips are narrow portrait phone video
+  (576 px wide), so people constantly touch a side edge. On D, 455 of ~1570
+  detections are gated (embeddings 3138 → 2361).
+
+| run | baseline conf/merged/net | horizontal + defer | horizontal, no defer | `all` + defer |
+|---|---|---|---|---|
+| A | 1/1/1 | 2/1/1 (5-frame temp id, f248) | same | 2/1/1 (55 frames) |
+| B | 2/1/1 | same ids, 31 frames later | same | **2/0/2** |
+| C, C b200 | 1/0/1 | identical | identical | identical |
+| D, D b150, D b300 | 7/3/4 | 6/2/4 | **7/2/5** | 6/2/4 |
+| D b450 | 5/1/4 | **7/1/6** | **7/0/7** | **7/1/6** |
+
+- D f410: the navy-hoodie woman (id 4) stands at the right edge. Baseline
+  re-identifies her at once; with the gate she becomes id 5 for 52 frames.
+- D b450 f602: both women come back at the edges after the blackout.
+  Baseline recovers ids 4 and 1 by ReID. With the gate they become 6 and 7.
+  Id 6 is merged back at f659; id 7 never is.
+- One small plus: D f450, the gate avoids a one-frame temporary id.
+- Checked against annotated stills at f410, f450, f602 and f640.
+- A 10 px margin is worse still (D net 5, D b450 net 7).
+- Verdict: drop for this camera setup. Kept as an option, off.
+- Tests: `test/test_edge_embedding_gate.py`.
+
+### 3. OSNet-AIN x1.0 and input normalization (`reid_model`, `reid_normalize`)
+
+- `reid_model`: `osnet_x1_0` (default) | `osnet_ain_x1_0`. The architecture is
+  vendored from deep-person-reid (MIT, `osnet_ain.py`). Weights come from the
+  official model zoo (MSMT17 combineall). They are sha256-pinned for both
+  models, and a fresh download is verified.
+- The loader now fails loudly on any backbone key/shape mismatch. Previously
+  it silently skipped mismatched keys, and the AIN checkpoint's `module.`
+  prefix would have left a randomly initialised backbone.
+- `reid_normalize`: torchreid's ImageNet mean/std, which both checkpoints
+  were trained with. Ours has never applied it.
+- **Separability on D.** Crops are labelled by the baseline's final identities.
+  Each query crop is compared with the max over 8 samples of an identity, all
+  taken ≥ 60 frames from the query, so it mimics a gallery.
+
+| config | own mean | other mean (p95) | AUC | at 0.65: recall / other-person accepts | threshold for 1% accepts → recall |
+|---|---|---|---|---|---|
+| x1.0 raw (today) | 0.873 | 0.653 (0.804) | 0.937 | 0.98 / **0.536** | 0.855 → 0.63 |
+| x1.0 normalized | 0.863 | 0.521 (0.667) | **0.975** | 0.94 / **0.097** | 0.713 → 0.88 |
+| AIN raw | 0.868 | 0.589 (0.719) | 0.957 | 0.94 / 0.314 | 0.745 → 0.83 |
+| AIN normalized | 0.870 | 0.587 (0.715) | 0.956 | 0.94 / 0.308 | 0.746 → 0.82 |
+
+  The earlier AIN agent got the same ordering with hand-verified labels
+  (gallery-max other-person accepts at 0.65: x1.0 raw 0.52, x1.0 norm 0.09,
+  AIN 0.28).
+- **Protocol** (8 runs, threshold 0.65 unless noted):
+  - x1.0 normalized:
+    - Same net identities on all 8 runs; no swaps.
+    - The navy-hoodie woman is re-identified 5 frames later twice on D
+      (f410, f571), and it avoids the baseline's one-frame temporary id at
+      f450.
+    - C has a 10-frame temporary id at f466-475, merged back correctly.
+  - AIN (raw or normalized):
+    - Same as baseline on D apart from 1-2-frame timing shifts. C has the
+      same 10-frame temporary id.
+    - **Regression on D b450:** the shorts woman returning at the right edge
+      after the blackout is never re-identified (new id 6 kept; net 5 vs 4).
+    - At threshold 0.70 it also adds a fragment on D.
+  - x1.0 normalized at 0.60: same as at 0.65.
+- Speed: identical for both models, ~1 ms/crop on GPU and ~14 ms/crop on CPU
+  (batches of 6).
+- Verdict:
+  - AIN: no gain over plain OSNet once inputs are normalized, plus one
+    regression. Kept as an option, off.
+  - Normalization: the largest separability gain of all six Ridgeback
+    experiments (other-person accepts at the current threshold drop
+    5.5×), and neutral on the protocol. It is left **off** here only
+    because every ReID threshold/margin was tuned on raw inputs. Turning it
+    on is a deliberate retune; it needs footage with real lookalike
+    false-merge risk (the crowd clip / 3-person clips), which these 4 clips
+    don't have.
+- Tests: `test/test_reid_embedder.py`.
