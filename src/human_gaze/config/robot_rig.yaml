@@ -10,21 +10,38 @@
 # this file's path (`robot_rig_file:=/path/to/your_robot_rig.yaml`) to
 # calibrate for your robot without touching the algorithm tuning file.
 #
-# The values below are PLACEHOLDERS (a generic ~1.2m-high, level, roughly
-# human-scale camera mount) - sees_robot/direct_contact are only physically
-# meaningful once these are replaced with your robot's real measurements.
+# Set up for a UNITREE R1 humanoid using its eye (head) camera. Sources:
+# Unitree's R1 page and the RBTX R1 datasheet - 1230 x 357 x 190 mm standing,
+# binocular depth camera in the head, 146 deg H / 124 deg V FOV, RGB
+# 1280x1080 @ 30 Hz. Unitree doesn't publish the eye height or the camera's
+# position inside the head, so values marked ESTIMATE come from the overall
+# size - measure them on the real robot (tape measure, robot standing in its
+# normal pose) and replace them.
+#
+# NOT set here - camera_hfov_deg (in human_gaze.yaml AND human_head_pose.yaml,
+# keep both equal): the pipeline assumes an undistorted (pinhole) image, and a
+# 146 deg lens is fisheye-like, so putting 146 there would make the person's
+# bearing wrong by up to ~20 deg mid-frame. Feed the pipeline a RECTIFIED
+# image (image_proc rectify with the robot's camera_info) and set
+# camera_hfov_deg = 2 * atan(image_width / (2 * fx)), with fx = K[0] of the
+# rectified camera_info. See docs/context/gaze.md.
 
 gaze_node:
   ros__parameters:
     # How high off the ground the CAMERA itself is mounted, in meters.
     # Used only for the ground-plane distance estimate (from a visible
     # ankle keypoint) - measure straight up from the floor to the lens.
-    camera_height_m: 1.2
+    # ESTIMATE: R1 is 1.23 m tall standing; eyes ~0.10 m below the top of
+    # the head, a little lower in its usual slightly-bent-knee stance.
+    camera_height_m: 1.10
 
     # How far the camera is tilted DOWNWARD from level/horizontal, in
     # degrees. 0 = camera pointed exactly at the horizon. Positive = tilted
     # down (most robot-mounted cameras looking down at people are
     # positive here). Negative = tilted up.
+    # R1 has a 2-DOF head, so this changes whenever the head tilts - this
+    # file is static, so keep the head level (0) while testing. Not tracked
+    # live from the head joints (see docs/context/gaze.md "Not done yet").
     camera_pitch_deg: 0.0
 
     # Where the ROBOT'S OWN BODY CENTER is relative to the camera, measured
@@ -56,12 +73,21 @@ gaze_node:
     # difference between "direct eye contact" and not. See
     # docs/context/gaze.md's "Design decisions: Phase 2" for the actual
     # numbers this produces at different distances.
+    #
+    # R1: "the robot" a person looks at is its face and upper body, so the
+    # center is put on the upper chest, ~0.25 m below the eyes (ESTIMATE),
+    # and ~0.08 m behind them (half the 0.19 m body depth, eyes on the front
+    # of the head - ESTIMATE). Right offset 0: one eye of the stereo pair is
+    # only ~3 cm off the centerline, negligible here.
     camera_offset_right_m: 0.0
-    camera_offset_down_m: 0.0
-    camera_offset_forward_m: 0.0
+    camera_offset_down_m: 0.25
+    camera_offset_forward_m: -0.08
 
     # Half the robot's own physical width, in meters - sets how wide a
     # cone around the robot counts as "in view" at a given distance
     # (robot_cone_deg = atan(robot_radius_m / distance)). Measure the
     # robot's widest dimension (as seen from the front) and halve it.
+    # R1: 0.357 m wide (radius 0.18), but the center above sits on the chest,
+    # so 0.3 makes the sphere reach from just above the eyes down to the
+    # hips - "looking anywhere from the face to the waist" counts.
     robot_radius_m: 0.3

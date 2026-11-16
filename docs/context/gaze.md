@@ -622,6 +622,27 @@ decisions: Phase 2" for why these are split out:
 | `camera_offset_down_m` | 0.0 | robot body center's position below the camera (negative = above) |
 | `camera_offset_forward_m` | 0.0 | robot body center's position in front of the camera (negative = behind - the common case for a camera that sticks out past the robot's own front face) |
 
+## Robot rig: Unitree R1 (2026-11-16)
+
+`config/robot_rig.yaml` now holds values for a Unitree R1 using its eye
+camera instead of generic placeholders. Unitree publishes only the overall
+size (1230 x 357 x 190 mm) and the camera (binocular depth, 146 x 124 deg
+FOV, RGB 1280x1080 @ 30 Hz). Eye height (1.10 m) and the body-center offset
+(0.25 m down, 0.08 m back) are estimates from those numbers, marked in the
+file for measuring on the real robot. The center is on the upper chest with
+`robot_radius_m` 0.3, so a gaze anywhere from the face to the waist counts
+as looking at the robot.
+
+`camera_hfov_deg` was deliberately left at 70. `bearing_deg` and
+`intrinsics_from_hfov` assume a pinhole image, and a 146 deg lens is
+fisheye-like. With 146 typed in, a person halfway to the image edge would
+get a pinhole bearing of ~58 deg against ~37 deg for an equidistant fisheye,
+a ~20 deg error, larger than `theta_contact_deg`. The fix is to feed a
+rectified image and set the FOV from its `camera_info` fx (formula in the
+yaml). The R1's actual camera topic and whether it publishes rectified
+images is unknown until it's checked on the robot. The head is also 2-DOF,
+and `camera_pitch_deg` is static, so tests should keep the head level.
+
 ## Not done yet
 
 - **The iris-position veto is fitted and validated on one clip** (three
