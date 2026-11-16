@@ -95,8 +95,21 @@ def generate_launch_description():
         executable="cam2image",
         name="webcam",
         output="screen",
-        parameters=[{"device_id": LaunchConfiguration("webcam_device"), "frequency": 30.0}],
+        # cam2image defaults to 320x240, too small for faces at room distance.
+        # 15 Hz: the chain runs ~5 Hz on CPU, so faster input only adds
+        # copies for the 5 image subscribers to drop.
+        parameters=[
+            {
+                "device_id": LaunchConfiguration("webcam_device"),
+                "width": 640,
+                "height": 480,
+                "frequency": 15.0,
+            }
+        ],
         remappings=[("image", image_topic)],
+        # cam2image logs an INFO line per published frame, burying the
+        # pipeline's own output.
+        ros_arguments=["--log-level", "warn"],
         condition=IfCondition(LaunchConfiguration("webcam")),
     )
 
