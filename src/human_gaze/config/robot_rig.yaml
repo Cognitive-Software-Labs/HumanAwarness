@@ -77,9 +77,11 @@ gaze_node:
     # R1: "the robot" a person looks at is its face and upper body, so the
     # center is put on the upper chest, ~0.25 m below the eyes (ESTIMATE),
     # and ~0.08 m behind them (half the 0.19 m body depth, eyes on the front
-    # of the head - ESTIMATE). Right offset 0: one eye of the stereo pair is
-    # only ~3 cm off the centerline, negligible here.
-    camera_offset_right_m: 0.0
+    # of the head - ESTIMATE). Only the RIGHT eye's image is used, so the
+    # camera sits half the eye spacing to the robot's right and the center
+    # is to the camera's LEFT: negative. -0.03 assumes ~6 cm between the eye
+    # lenses (ESTIMATE - measure lens center to the robot's midline).
+    camera_offset_right_m: -0.03
     camera_offset_down_m: 0.25
     camera_offset_forward_m: -0.08
 

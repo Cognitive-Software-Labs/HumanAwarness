@@ -628,7 +628,7 @@ decisions: Phase 2" for why these are split out:
 camera instead of generic placeholders. Unitree publishes only the overall
 size (1230 x 357 x 190 mm) and the camera (binocular depth, 146 x 124 deg
 FOV, RGB 1280x1080 @ 30 Hz). Eye height (1.10 m) and the body-center offset
-(0.25 m down, 0.08 m back) are estimates from those numbers, marked in the
+(0.25 m down, 0.08 m back, and 0.03 m left since only the right eye is used) are estimates from those numbers, marked in the
 file for measuring on the real robot. The center is on the upper chest with
 `robot_radius_m` 0.3, so a gaze anywhere from the face to the waist counts
 as looking at the robot.
