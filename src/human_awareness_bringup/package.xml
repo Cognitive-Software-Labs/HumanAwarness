@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>human_awareness_bringup</name>
+  <version>0.0.1</version>
+  <description>
+    One launch file that starts the whole human awareness pipeline
+    (detection, tracking, head pose, gaze, awareness, visualization), with
+    optional webcam input and an optional live viewer window.
+  </description>
+  <maintainer email="lauramuresan420@gmail.com">Laura</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>human_perception</exec_depend>
+  <exec_depend>human_tracking</exec_depend>
+  <exec_depend>human_head_pose</exec_depend>
+  <exec_depend>human_gaze</exec_depend>
+  <exec_depend>human_awareness</exec_depend>
+  <exec_depend>human_visualization</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <!-- rqt_image_view (viewer:=true) and image_tools (webcam:=true) are
+       deliberately not listed: both are off by default, so a headless
+       robot doesn't have to install Qt/rqt. -->
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

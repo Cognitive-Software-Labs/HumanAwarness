@@ -60,6 +60,18 @@ COCO-17 body keypoints. This is the raw perception input that later parts
   multi-person validation for the measured tradeoffs; not necessarily
   monotonic - too high was measured to make it *worse* on real footage, so
   don't just maximize it blindly).
+- Model lookup (`human_perception/model_path.py`): a bare `model_path`
+  name not found in the cwd resolves to `~/.cache/human_perception/<name>`
+  (same per-package cache as the head pose/gaze/ReID weights), so the node
+  finds its weights wherever it is launched from - before this, launching
+  from any other folder made Ultralytics try a GitHub download, which fails
+  offline. Paths with a directory are used as given.
+- Offline: the node sets `YOLO_OFFLINE=1` (unless already set) before
+  importing Ultralytics, which otherwise probes DNS at import to decide on
+  analytics/auto-updates and can stall on a LAN with no internet.
+  `scripts/download_models.py` pre-fills every stage's cache. Verified
+  2026-11-16: all five models load and `bbox_keypoints_node` starts and
+  subscribes inside `unshare -rn` (no network) from an unrelated cwd.
 
 ## Environment: venv + ROS2 + colcon gotchas
 
@@ -141,4 +153,6 @@ environment cleanly. Two issues hit during setup, both resolved — see
     sorted; alternatively a plain `cv2.VideoCapture` + `cv_bridge` script
     needs no extra apt package at all.
 - Model weights (`yolo26n-pose.pt`) are not vendored; Ultralytics will
-  download them on first run if not already cached locally.
+  download them on first run if not in the cwd or
+  `~/.cache/human_perception/` (`scripts/download_models.py` fetches them
+  ahead of time for offline use).

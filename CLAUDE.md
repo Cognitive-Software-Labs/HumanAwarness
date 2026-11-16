@@ -66,3 +66,7 @@ workspace under `src/`.
 Template for new entries:
 - **<part name>** — one-line description. See `docs/context/<part>.md`.
 -->
+- **bringup (whole pipeline in one launch)** — starts all six stages plus
+  an optional webcam and `rqt_image_view` window, with one `image_topic`
+  remap for every stage (`human_awareness_bringup` package,
+  `full_pipeline.launch.py`). See `docs/context/bringup.md`.

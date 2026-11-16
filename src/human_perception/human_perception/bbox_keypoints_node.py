@@ -1,13 +1,22 @@
 """ROS2 node: monocular RGB human detection (bbox + COCO-17 keypoints) via YOLO26-pose."""
 
-import cv2
-import rclpy
-from cv_bridge import CvBridge
-from rclpy.node import Node
-from sensor_msgs.msg import Image
-from ultralytics import YOLO
+import os
 
-from human_awareness_msgs.msg import Keypoint2D, PersonDetection, PersonDetectionArray
+# Must be set before Ultralytics is imported: it probes DNS once at import
+# time to decide whether to sync analytics / auto-update requirements, and on
+# a robot LAN with no internet that probe can stall on DNS timeouts. Export
+# YOLO_OFFLINE=0 to opt back in.
+os.environ.setdefault("YOLO_OFFLINE", "1")
+
+import cv2  # noqa: E402
+import rclpy  # noqa: E402
+from cv_bridge import CvBridge  # noqa: E402
+from rclpy.node import Node  # noqa: E402
+from sensor_msgs.msg import Image  # noqa: E402
+from ultralytics import YOLO  # noqa: E402
+
+from human_awareness_msgs.msg import Keypoint2D, PersonDetection, PersonDetectionArray  # noqa: E402
+from human_perception.model_path import resolve_model_path  # noqa: E402
 
 # Keypoint order produced by YOLO-pose models, trained on the COCO-17 skeleton.
 COCO_KEYPOINT_NAMES = [
@@ -46,7 +55,7 @@ class BboxKeypointsNode(Node):
 
         image_topic = self.get_parameter("image_topic").value
         detections_topic = self.get_parameter("detections_topic").value
-        model_path = self.get_parameter("model_path").value
+        model_path = resolve_model_path(self.get_parameter("model_path").value)
         self.device = self.get_parameter("device").value
         self.confidence_threshold = self.get_parameter("confidence_threshold").value
         self.imgsz = self.get_parameter("imgsz").value

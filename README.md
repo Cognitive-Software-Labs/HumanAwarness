@@ -80,7 +80,45 @@ Each new shell needs both `source /opt/ros/<distro>/setup.bash` and
 `source .venv/bin/activate` (in that order) before `source
 install/setup.bash`.
 
+### Running offline (no wifi)
+
+Every model is downloaded on first use and cached under `~/.cache/human_*`
+(about 150 MB in total; the `.venv` with torch/CUDA is the big part, ~5.7 GB).
+Fetch them all once while online:
+
+```bash
+python3 scripts/download_models.py            # add --extras for yolo26s-pose + OSNet-AIN
+```
+
+After that the whole pipeline runs with no network. To move it to a machine
+that has never been online, copy `~/.cache/human_perception`,
+`human_tracking`, `human_head_pose` and `human_gaze` over (same paths), plus
+a `.venv` built with the same Python version. The detection node sets
+`YOLO_OFFLINE=1` itself; for the no-ROS test scripts, `export YOLO_OFFLINE=1`
+avoids Ultralytics' online check stalling on a network without internet.
+
 ## Launch
+
+### Everything at once
+
+```bash
+ros2 launch human_awareness_bringup full_pipeline.launch.py viewer:=true
+```
+
+Starts all six stages below plus, with `viewer:=true`, a window showing what
+the robot sees with each person's box, id, LOOKING / NOT LOOKING and
+awareness drawn on. Other arguments:
+- `image_topic:=/your/camera/topic` if the robot's camera doesn't publish on
+  `/camera/image_raw`.
+- `webcam:=true` to use a laptop webcam (`webcam_device:=N` to pick one).
+- `robot_rig_file:=...` for your robot's calibration.
+
+The window needs a screen. On a robot without one, leave `viewer` off and
+run the viewer on a laptop on the same network with the same
+`ROS_DOMAIN_ID`:
+`ros2 run rqt_image_view rqt_image_view /human_visualization/debug_image`.
+To use a custom yaml for one stage, launch that stage's own launch file
+below instead (details: `docs/context/bringup.md`).
 
 ### bbox + keypoints detection
 
