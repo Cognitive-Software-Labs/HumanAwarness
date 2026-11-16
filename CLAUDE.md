@@ -56,6 +56,11 @@ workspace under `src/`.
   confidence for "knows the robot is there", rising while `sees_robot`
   holds and fading over `tau_awareness_s` (`human_awareness` package,
   `awareness_node`). See `docs/context/awareness.md`.
+- **live visualization** — annotated camera view for a live/ROS run: pairs
+  the camera image with the final per-person output by exact stamp and
+  publishes it with bbox/id/looking/awareness drawn on, sharing its drawing
+  code with the full-chain video script (`human_visualization` package,
+  `visualization_node`). See `docs/context/visualization.md`.
 
 <!--
 Template for new entries:

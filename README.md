@@ -36,6 +36,11 @@ See `CLAUDE.md` for a running index of what's been built, and
   robot, fading over ~8 s afterwards, and kept across LOST/ReID gaps
   (`human_awareness` package, `awareness_node`). See
   `docs/context/awareness.md`.
+- **live visualization** — the live counterpart of `test_output/`'s
+  annotated videos: the camera image with each person's bbox, id,
+  looking label and awareness bar drawn on, published as a ROS image topic
+  to watch in `rqt_image_view` / RViz2 / Foxglove (`human_visualization`
+  package, `visualization_node`). See `docs/context/visualization.md`.
 
 ## Setup
 
@@ -281,6 +286,68 @@ Unit tests for the core (no ROS needed):
 ```bash
 PYTHONPATH=src/human_awareness python3 -m pytest src/human_awareness/test -q
 ```
+
+### live visualization (see what the robot sees)
+
+```bash
+ros2 launch human_visualization human_visualization.launch.py
+```
+
+Subscribes to the camera image (`image_topic`, default `/camera/image_raw`)
+and the awareness output (`detections_topic`, default
+`human_awareness/awareness`). It publishes `human_visualization/debug_image`:
+the camera frame each result was computed on, with the same overlay as the
+full-chain video script. That's the bbox and `id N` (green, or orange
+"predicted" while the tracker coasts on Kalman), LOOKING AT ROBOT /
+NOT LOOKING, the awareness value + bar, and a top-left people count and
+pipeline lag. It runs no models.
+
+Watch it live:
+
+```bash
+ros2 run rqt_image_view rqt_image_view /human_visualization/debug_image
+```
+
+(or add an Image display in RViz2, or open it in Foxglove through
+`foxglove_bridge`). Record a session to look at or score later:
+
+```bash
+ros2 bag record /camera/image_raw /human_visualization/debug_image /human_awareness/awareness
+```
+
+To see one stage alone, point it at that stage's topic, e.g.
+`-p detections_topic:=human_tracking/tracked_detections -p show_gaze:=false
+-p show_awareness:=false` for tracking ids only. If the chain is slow and the
+node warns that detections are older than its buffer, raise
+`image_buffer_size` (default 60 frames). Params:
+`src/human_visualization/config/human_visualization.yaml`.
+
+Unit tests (no ROS needed):
+
+```bash
+PYTHONPATH=src/human_visualization python3 -m pytest src/human_visualization/test -q
+```
+
+### Running on a live camera
+
+Every node takes its frames from `/camera/image_raw`, so a live camera
+just means running a camera driver that publishes there, e.g.:
+
+```bash
+ros2 run usb_cam usb_cam_node_exe --ros-args -r image_raw:=/camera/image_raw
+```
+
+Then start the five pipeline nodes above and the visualization. Notes:
+
+- Raw `sensor_msgs/Image` only, not `CompressedImage`.
+- The nodes subscribe with default (reliable) QoS. A driver that publishes
+  best-effort (sensor-data QoS) is silently never received: check with
+  `ros2 topic info -v /camera/image_raw`.
+- At 30 fps, about 11% of frames are dropped along the chain (see
+  `docs/context/visualization.md`). The design doc targets ~10-15 fps.
+- Set `camera_hfov_deg` and `robot_rig.yaml` to your real camera and robot.
+- Packages are installed as copies, not symlinks, even with
+  `--symlink-install` here: rebuild after editing a node.
 
 ## Testing on a static image (no ROS2 needed)
 

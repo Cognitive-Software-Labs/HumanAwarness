@@ -1,0 +1,18 @@
+visualization_node:
+  ros__parameters:
+    image_topic: /camera/image_raw
+    # The pipeline output to draw. Point it at an earlier stage to see that
+    # stage alone: human_perception/detections (boxes only),
+    # human_tracking/tracked_detections (+ ids), human_head_pose/head_poses
+    # (+ head-only looking label), human_gaze/gazes (+ iris/phase-2 label).
+    detections_topic: human_awareness/awareness
+    debug_image_topic: human_visualization/debug_image
+    # Camera frames kept to pair with late-arriving detections: must cover
+    # the whole pipeline's delay (at 30 fps, 60 frames = 2 s).
+    image_buffer_size: 60
+    # Flat |gaze_robot_deg| threshold for the LOOKING label when the phase-2
+    # decision couldn't run (no distance estimate) - same as the video script.
+    aware_threshold_deg: 45.0
+    show_gaze: true       # LOOKING / NOT LOOKING / no head pose label
+    show_awareness: true  # awareness value + confidence bar
+    show_info: true       # people count + pipeline lag, top-left
