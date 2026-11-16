@@ -6,7 +6,7 @@ human_tracking_node:
     sync_slop_s: 0.05
     reid_weights_path: ""
     reid_model: osnet_x1_0  # osnet_x1_0 | osnet_ain_x1_0
-    reid_normalize: false  # ImageNet mean/std input normalization
+    reid_normalize: true  # ImageNet mean/std input normalization (what both checkpoints were trained with)
     device: cpu
     gallery_size: 8
     iou_threshold: 0.3

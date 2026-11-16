@@ -933,9 +933,49 @@ shorts, id 2 = man in white tee/jeans, id 4 = woman in navy hoodie. Baseline
     regression. Kept as an option, off.
   - Normalization: the largest separability gain of all six Ridgeback
     experiments (other-person accepts at the current threshold drop
-    5.5×), and neutral on the protocol. It is left **off** here only
-    because every ReID threshold/margin was tuned on raw inputs. Turning it
-    on is a deliberate retune; it needs footage with real lookalike
-    false-merge risk (the crowd clip / 3-person clips), which these 4 clips
-    don't have.
+    5.5×), and neutral on the protocol. **Now on by default**, see below.
 - Tests: `test/test_reid_embedder.py`.
+
+### Normalization on by default (`reid_normalize: true`)
+
+`ReIDEmbedder(normalize=True)` is now the default, as are the node parameter,
+the yaml and `scripts/test_human_tracking_on_video.py`. `--no-reid-normalize`
+gives the old raw-input behaviour. The two full-chain video scripts
+(head pose; head pose + gaze) pick it up through the embedder default; both
+were run end to end on clip A.
+
+Re-verified with the real test script, not the replay. Normalized vs
+`--no-reid-normalize`, all 8 runs, threshold 0.65. The real dumps match the
+replay frame for frame.
+
+| run | raw conf/merged/net, motion+ReID | normalized | frames with different ids |
+|---|---|---|---|
+| A | 1/1/1, 0+1 | identical | 0 |
+| B | 2/1/1, 0+1 | 2/1/1, 0+1 | 6 (f318-323) |
+| C | 1/0/1, 1+1 | 2/1/1, 1+1 | 10 (f466-475) |
+| C b200 | 1/0/1, 1+2 | 2/1/1, 1+2 | 10 (f466-475) |
+| D, D b150, D b300 | 7/3/4 | 7/3/4 | 15 (f410-573) |
+| D b450 | 5/1/4, 7+4 | 5/1/4, 7+5 | 0 id changes (lost-state timing only) |
+
+- Net identities are unchanged on every run. No swaps: every difference was
+  checked against the dumps, and D's against annotated stills (f412, f450,
+  f562, f573).
+- **Slower re-attach:**
+  - B and C (single person): the returning person is matched 6 and 10
+    frames later, as a temporary id that is merged back correctly.
+  - D: the navy-hoodie woman, partly cut off at the image edge, gets a
+    temporary id for 3 frames (f410-414) and 1 frame (f573) before being
+    merged back into id 4.
+- **Faster re-attach:**
+  - D f450: the shorts woman returning at the left edge is recognized at
+    once, where raw gives her a one-frame temporary id 6.
+  - D b450: she is recognized at f449, before the blackout, instead of not
+    at all.
+- D's merge map reads `{5: 4, 6: 2, 7: 4}` vs raw `{5: 4, 6: 1, 7: 2}`.
+  This is renumbering, not a different outcome: the man's temporary id at
+  f560 is 6 here and 7 in raw.
+- Threshold stays 0.65. 0.60 gave identical protocol results, and the
+  separability data put the 1%-false-accept point at 0.71. So 0.65 keeps
+  most of the safety gain while accepting 94% of same-person comparisons.
+- Still to prove: fewer false merges on footage that actually has them
+  (crowd / 3-person lookalike scenes). These 4 clips have none to fix.

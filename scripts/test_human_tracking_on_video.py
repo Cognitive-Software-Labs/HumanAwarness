@@ -82,8 +82,10 @@ def main():
     )
     parser.add_argument(
         "--reid-normalize",
-        action="store_true",
-        help="apply torchreid's ImageNet mean/std input normalization before the ReID model",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="apply torchreid's ImageNet mean/std input normalization before the ReID model (default on; "
+        "--no-reid-normalize reproduces the raw-input behaviour the thresholds were first tuned on)",
     )
     parser.add_argument("--reid-weights", default=None, help="path to the --reid-model weights (default: ~/.cache)")
     parser.add_argument("--reid-device", default="cpu", help="e.g. cpu, cuda:0 - device for the OSNet embedder")

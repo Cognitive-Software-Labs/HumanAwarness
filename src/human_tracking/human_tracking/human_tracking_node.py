@@ -63,7 +63,7 @@ class HumanTrackingNode(Node):
         self.declare_parameter("sync_slop_s", 0.05)
         self.declare_parameter("reid_weights_path", "")
         self.declare_parameter("reid_model", "osnet_x1_0")
-        self.declare_parameter("reid_normalize", False)
+        self.declare_parameter("reid_normalize", True)
         self.declare_parameter("device", "cpu")
         self.declare_parameter("gallery_size", 8)
         self.declare_parameter("iou_threshold", 0.3)

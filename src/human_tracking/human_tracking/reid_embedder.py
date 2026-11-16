@@ -138,7 +138,7 @@ class ReIDEmbedder:
         weights_path: str | None = None,
         device: str = "cpu",
         model: str = "osnet_x1_0",
-        normalize: bool = False,
+        normalize: bool = True,
     ):
         if model not in _MODELS:
             raise ValueError(f"Unknown ReID model '{model}', expected one of {REID_MODELS}")

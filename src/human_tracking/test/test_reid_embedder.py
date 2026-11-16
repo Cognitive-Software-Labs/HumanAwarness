@@ -55,3 +55,9 @@ def test_embedder_outputs_unit_vectors_and_none_for_empty_crops(tmp_path, model)
     assert np.isclose(np.linalg.norm(raw[0]), 1.0, atol=1e-5)
     assert np.isclose(np.linalg.norm(normed[0]), 1.0, atol=1e-5)
     assert not np.allclose(raw[0], normed[0])  # the flag really changes the model input
+
+
+def test_normalization_is_on_by_default(tmp_path):
+    path = tmp_path / "w.pth"
+    torch.save(_random_checkpoint(osnet_x1_0), path)
+    assert ReIDEmbedder(weights_path=str(path)).normalize is True
