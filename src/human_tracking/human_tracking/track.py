@@ -128,6 +128,42 @@ def is_plausible_person_crop(
     return spread >= min_spread_frac * bbox_height
 
 
+EDGE_SIDES_OFF = "off"
+EDGE_SIDES_HORIZONTAL = "horizontal"  # left/right image edges only
+EDGE_SIDES_ALL = "all"  # left/right and top/bottom
+EDGE_SIDES_CHOICES = (EDGE_SIDES_OFF, EDGE_SIDES_HORIZONTAL, EDGE_SIDES_ALL)
+
+
+def touches_image_edge(
+    bbox_xyxy: tuple[float, float, float, float],
+    frame_size: tuple[int, int] | None,
+    margin_px: float,
+    sides: str,
+) -> bool:
+    """True if the box lies within `margin_px` of an image border on one of
+    the checked `sides` - i.e. the person is (probably) cut off by the frame.
+
+    Such a crop's appearance is treated as *unavailable*, not as evidence:
+    an exiting/entering person's half-body crop embeds very differently from
+    their full-body gallery samples, so letting it into a gallery dilutes
+    that gallery, and letting it act as a ReID query makes a genuine match
+    look like a different person (or, worse, lets a generic half-body crop
+    look like someone else). Motion/IoU tracking of the box is unaffected.
+    `frame_size` is (width, height); None (unknown) or sides="off" never gates.
+    """
+    if frame_size is None or sides == EDGE_SIDES_OFF:
+        return False
+    if sides not in EDGE_SIDES_CHOICES:
+        raise ValueError(f"edge sides must be one of {EDGE_SIDES_CHOICES}, got {sides!r}")
+    width, height = frame_size
+    x1, y1, x2, y2 = bbox_xyxy
+    if x1 <= margin_px or x2 >= width - margin_px:
+        return True
+    if sides == EDGE_SIDES_ALL and (y1 <= margin_px or y2 >= height - margin_px):
+        return True
+    return False
+
+
 def crop_quality(confidence: float, bbox_xyxy: tuple[float, float, float, float], frame_area: float) -> float:
     """Heuristic quality score for a detection crop: higher confidence and a
     larger (closer/clearer) crop both make for a more reliable gallery sample."""
@@ -158,6 +194,9 @@ class Track:
         self.consecutive_hits = 0
         self.seconds_since_last_seen = 0.0
         self.age_seconds = 0.0  # time since creation - used for the reconciliation grace window
+        # Time spent, since creation, matched only to edge-gated detections while
+        # the gallery was still empty - see Tracker's edge_defers_reconcile_window.
+        self.edge_wait_seconds = 0.0
 
         self.last_bbox = bbox_xyxy
         self.last_confidence = 0.0

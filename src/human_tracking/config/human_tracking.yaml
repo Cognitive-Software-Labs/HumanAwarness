@@ -5,6 +5,8 @@ human_tracking_node:
     tracked_topic: human_tracking/tracked_detections
     sync_slop_s: 0.05
     reid_weights_path: ""
+    reid_model: osnet_x1_0  # osnet_x1_0 | osnet_ain_x1_0
+    reid_normalize: true  # ImageNet mean/std input normalization (what both checkpoints were trained with)
     device: cpu
     gallery_size: 8
     iou_threshold: 0.3
@@ -26,3 +28,8 @@ human_tracking_node:
     cooccurrence_max_overlap: 0.5
     bystander_negative_check: false
     bystander_margin: 0.0
+    # stage-1 motion/IoU assignment: greedy | hungarian (hungarian needs scipy)
+    assignment_method: greedy
+    edge_embedding_sides: "off"
+    edge_embedding_margin_px: 2.0
+    edge_defers_reconcile_window: true
