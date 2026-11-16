@@ -2,8 +2,11 @@ awareness_node:
   ros__parameters:
     gazes_topic: human_gaze/gazes
     awareness_topic: human_awareness/awareness
-    # Design doc's "D · Aggregation" values.
-    tau_awareness_s: 8.0  # how long a sighting keeps someone aware
+    # Forgetting, from memory research (docs/context/awareness.md "Forgetting timescale"):
+    # a just-seen object is held without loss for ~4 s (Zhang & Luck 2009), and an
+    # unrehearsed short-term memory is gone after ~18-30 s (Peterson & Peterson 1959).
+    forget_delay_s: 4.0  # no forgetting at all for this long after the last sighting
+    tau_awareness_s: 20.0  # then fades with this time constant (half-life ~14 s); design doc had 8.0
     cue_max_age_s: 0.5  # a gaze cue counts for at most this long after its frame
     init_value: 0.5  # a new track_id starts at "don't know" (confidence 0)
     # Not in the design doc - see docs/context/awareness.md.

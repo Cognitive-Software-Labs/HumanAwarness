@@ -23,7 +23,8 @@ class AwarenessNode(Node):
 
         self.declare_parameter("gazes_topic", "human_gaze/gazes")
         self.declare_parameter("awareness_topic", "human_awareness/awareness")
-        self.declare_parameter("tau_awareness_s", 8.0)
+        self.declare_parameter("tau_awareness_s", 20.0)
+        self.declare_parameter("forget_delay_s", 4.0)
         self.declare_parameter("cue_max_age_s", 0.5)
         self.declare_parameter("rise_time_s", 0.5)
         self.declare_parameter("confidence_time_s", 2.0)
@@ -35,6 +36,7 @@ class AwarenessNode(Node):
         awareness_topic = self.get_parameter("awareness_topic").value
         self.aggregator = AwarenessAggregator(
             tau_s=self.get_parameter("tau_awareness_s").value,
+            forget_delay_s=self.get_parameter("forget_delay_s").value,
             cue_max_age_s=self.get_parameter("cue_max_age_s").value,
             rise_time_s=self.get_parameter("rise_time_s").value,
             confidence_time_s=self.get_parameter("confidence_time_s").value,

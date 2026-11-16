@@ -191,6 +191,9 @@ class GazeNode(Node):
             det.iris_valid = result.iris_valid
             det.iris_fixating = result.iris_fixating
             det.iris_yaw_deg = result.iris_yaw_deg
+            det.gaze_gate_reason = result.gate_reason
+            det.iris_offset = result.iris_offset if result.iris_offset is not None else -1.0
+            det.eyes_averted = result.eyes_averted
             if result.geometric is not None:
                 g = result.geometric
                 det.distance_m = g.distance_m if g.distance_m is not None else 0.0

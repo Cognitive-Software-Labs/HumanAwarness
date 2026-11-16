@@ -9,7 +9,10 @@ whichever cue holds over each stretch of time:
 
 - sees the robot (`sees_robot`, weight w from the gaze source): value
   rises toward 1 with time constant `rise_time_s / w`;
-- in view but doesn't see it: value relaxes with `tau_s` toward
+- for `forget_delay_s` after the last moment it saw the robot, the value
+  doesn't fall at all (a just-seen object is held in visual working memory
+  for a few seconds before forgetting starts), whatever the cue;
+- after that, in view but doesn't see it: value relaxes with `tau_s` toward
   `(1 - w) * init_value`, which is 0 for an iris reading and only part of
   the way down for head pose, since head pose can't see the eyes;
 - no usable cue (not detected, LOST_*, no head pose, or the last cue is
@@ -55,12 +58,14 @@ class _TrackState:
     stamp_s: float
     cue: AwarenessCue | None = None
     cue_stamp_s: float = 0.0
+    last_sighting_s: float | None = None  # end of the latest stretch with a held sees_robot cue
 
 
 class AwarenessAggregator:
     def __init__(
         self,
-        tau_s: float = 8.0,
+        tau_s: float = 20.0,
+        forget_delay_s: float = 4.0,
         cue_max_age_s: float = 0.5,
         rise_time_s: float = 0.5,
         confidence_time_s: float = 2.0,
@@ -70,7 +75,7 @@ class AwarenessAggregator:
     ):
         """`tau_s`, `cue_max_age_s` and `init_value` are the design doc's
         `tau_awareness_s`, `cue_max_age_s` and `init_value`; `weight_*` stand
-        in for its `fusion_weights` file. `rise_time_s` and
+        in for its `fusion_weights` file. `forget_delay_s`, `rise_time_s` and
         `confidence_time_s` are new here (docs/context/awareness.md)."""
         for name, v in (
             ("tau_s", tau_s),
@@ -80,12 +85,15 @@ class AwarenessAggregator:
         ):
             if v <= 0.0:
                 raise ValueError(f"{name} must be > 0, got {v}")
+        if forget_delay_s < 0.0:
+            raise ValueError(f"forget_delay_s must be >= 0, got {forget_delay_s}")
         for name, w in (("weight_iris", weight_iris), ("weight_head", weight_head)):
             if not 0.0 < w <= 1.0:
                 raise ValueError(f"{name} must be in (0, 1], got {w}")
         if not 0.0 <= init_value <= 1.0:
             raise ValueError(f"init_value must be in [0, 1], got {init_value}")
         self.tau_s = tau_s
+        self.forget_delay_s = forget_delay_s
         self.cue_max_age_s = cue_max_age_s
         self.rise_time_s = rise_time_s
         self.confidence_time_s = confidence_time_s
@@ -135,24 +143,32 @@ class AwarenessAggregator:
             held_until = state.cue_stamp_s + self.cue_max_age_s
             cue_end = min(stamp_s, held_until)
             if cue_end > t:
-                self._apply_cue(state, state.cue, cue_end - t)
+                self._apply_cue(state, state.cue, t, cue_end)
                 t = cue_end
             if stamp_s >= held_until:
                 state.cue = None
         if stamp_s > t:
-            self._apply_no_cue(state, stamp_s - t)
+            self._apply_no_cue(state, t, stamp_s)
         state.stamp_s = stamp_s
 
-    def _apply_cue(self, state: _TrackState, cue: AwarenessCue, dt: float) -> None:
+    def _value_decay(self, state: _TrackState, t0: float, t1: float) -> float:
+        """Decay factor for the value over [t0, t1]: no forgetting until
+        `forget_delay_s` after the last sighting, `tau_s` after that."""
+        if state.last_sighting_s is not None:
+            t0 = max(t0, state.last_sighting_s + self.forget_delay_s)
+        return math.exp(-max(0.0, t1 - t0) / self.tau_s)
+
+    def _apply_cue(self, state: _TrackState, cue: AwarenessCue, t0: float, t1: float) -> None:
+        dt = t1 - t0
         w = self._weights[cue.source]
         if cue.sees_robot:
             state.value = 1.0 - (1.0 - state.value) * math.exp(-w * dt / self.rise_time_s)
+            state.last_sighting_s = t1
         else:
             target = (1.0 - w) * self.init_value
-            state.value = target + (state.value - target) * math.exp(-dt / self.tau_s)
+            state.value = target + (state.value - target) * self._value_decay(state, t0, t1)
         state.confidence = 1.0 - (1.0 - state.confidence) * math.exp(-w * dt / self.confidence_time_s)
 
-    def _apply_no_cue(self, state: _TrackState, dt: float) -> None:
-        decay = math.exp(-dt / self.tau_s)
-        state.value = self.init_value + (state.value - self.init_value) * decay
-        state.confidence *= decay
+    def _apply_no_cue(self, state: _TrackState, t0: float, t1: float) -> None:
+        state.value = self.init_value + (state.value - self.init_value) * self._value_decay(state, t0, t1)
+        state.confidence *= math.exp(-(t1 - t0) / self.tau_s)

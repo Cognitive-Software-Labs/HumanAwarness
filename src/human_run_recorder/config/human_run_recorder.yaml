@@ -1,0 +1,30 @@
+run_recorder_node:
+  ros__parameters:
+    image_topic: /camera/image_raw
+    # The pipeline's final output: every per-person field, awareness included.
+    detections_topic: human_awareness/awareness
+    # `ros2 run human_run_recorder mark` publishes here (std_msgs/String, the note).
+    mark_topic: human_run_recorder/mark
+    # Each run gets its own folder in here, named by start time (or run_name).
+    runs_dir: ~/human_awareness_runs
+    run_name: ""
+    # Camera frames kept to pair with late-arriving detections (same as visualization_node).
+    image_buffer_size: 60
+    # Same flat fallback as the video script / visualization_node, for is_looking.
+    aware_threshold_deg: 45.0
+    # Also write annotated.mkv (the overlay plus per-person debug numbers).
+    record_annotated: true
+    # The video fps is estimated from this many frames' stamps (the pipeline
+    # processes fewer frames than the camera sends); fallback if stamps are unusable.
+    video_probe_frames: 15
+    fallback_fps: 15.0
+    # Seconds after start to save every running node's parameters (params.yaml).
+    params_dump_delay_s: 5.0
+    # Lowest /rosout level written to rosout.log: 10 debug, 20 info, 30 warn, 40 error.
+    log_min_level: 20
+    # When a new run starts, shrink every earlier finished run in the background
+    # (nothing is deleted): videos re-encoded to H.264, text files gzipped.
+    # See docs/context/run_recorder.md, "Compressing old runs".
+    compress_previous_runs: true
+    compress_crf: 23  # H.264 quality: lower = better and bigger; 28 is ~2x smaller again but changes more re-run results
+    compress_threads: 2  # ffmpeg threads, at lowest CPU priority, so the live pipeline isn't slowed

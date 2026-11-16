@@ -12,6 +12,11 @@ Usage:
     python3 scripts/label_review_tool.py path/to/video.mp4 \\
         --predictions test_output/video.jsonl
 
+    # a live run recorded with record:=true (docs/context/run_recorder.md):
+    python3 scripts/label_review_tool.py ~/human_awareness_runs/<run>/camera.mkv \\
+        --predictions ~/human_awareness_runs/<run>/predictions.jsonl
+    # its markers.jsonl (problems marked live) is picked up automatically
+
 Keys:
     Right/d / Left/a   step 1 frame
     ]/[                jump 10 frames
@@ -19,6 +24,7 @@ Keys:
                        gaze label disagrees with its prediction
     e / E              jump to next/previous "track event" frame (a track_id
                        entering or leaving the frame)
+    m / M              jump to next/previous problem marker (recorded runs)
     click a box        select that track (required for the labels below)
     l / k / u          label selected track at this frame: looking /
                        not_looking / unsure (extends the open interval)
@@ -37,6 +43,7 @@ Keys:
 """
 
 import argparse
+import json
 import signal
 import sys
 from pathlib import Path
@@ -44,7 +51,14 @@ from pathlib import Path
 import cv2
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _label_io import GAZE_LOOKING, GAZE_NOT_LOOKING, GAZE_UNSURE, Labels, load_predictions
+from _label_io import (
+    GAZE_LOOKING,
+    GAZE_NOT_LOOKING,
+    GAZE_UNSURE,
+    Labels,
+    default_labels_path,
+    load_predictions,
+)
 from _video_rotation import ensure_upright
 
 WINDOW = "label_review_tool"
@@ -93,6 +107,39 @@ def find_next_disagreement_frame(predictions_by_frame: dict, labels: Labels, tot
     return None
 
 
+def load_markers(path: Path | None) -> list:
+    """Problem markers from a recorded run's markers.jsonl, sorted by frame
+    ([] if there's no such file)."""
+    if path is None or not path.exists():
+        return []
+    markers = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    return sorted(markers, key=lambda m: m["frame"])
+
+
+def find_next_marker_frame(markers: list, start: int, step: int) -> int | None:
+    frames = [m["frame"] for m in markers]
+    candidates = [f for f in frames if f > start] if step > 0 else [f for f in frames if f < start]
+    if not candidates:
+        return None
+    return min(candidates) if step > 0 else max(candidates)
+
+
+def live_debug_text(row: dict) -> str | None:
+    """The gaze-stage numbers a recorded live run adds to each row (the
+    video script's export doesn't have them)."""
+    if "iris_offset" not in row or not row["head_pose_valid"]:
+        return None
+    parts = [f"src {row.get('gaze_source')}"]
+    if row.get("theta_to_robot_deg") is not None:
+        parts.append(f"theta {row['theta_to_robot_deg']:.1f} d {row['distance_m']:.2f}m")
+    parts.append(f"iris off {row['iris_offset']:.2f}" if row["iris_offset"] is not None else "iris -")
+    if row.get("eyes_averted"):
+        parts.append("AVERTED")
+    if row.get("awareness_value") is not None:
+        parts.append(f"aware {row['awareness_value']:.2f}")
+    return " | ".join(parts)
+
+
 def prompt_text(base_frame, prompt: str) -> str | None:
     """Minimal inline text entry: no native text box in a bare OpenCV
     window, so this redraws `base_frame` with the prompt + typed-so-far
@@ -118,7 +165,7 @@ def prompt_text(base_frame, prompt: str) -> str | None:
 
 
 def draw_frame(frame, predictions_by_frame: dict, labels: Labels, frame_idx: int,
-               selected_track_id: int | None, show_help: bool):
+               selected_track_id: int | None, show_help: bool, markers: list = ()):
     annotated = frame.copy()
     for row in predictions_by_frame.get(frame_idx, []):
         x1, y1, x2, y2 = row["bbox"]
@@ -137,12 +184,23 @@ def draw_frame(frame, predictions_by_frame: dict, labels: Labels, frame_idx: int
         gt_text = f" | GT:{gt_label}" if gt_label else ""
         cv2.putText(annotated, f"id {row['track_id']} ({person_id}) pred:{pred_text}{gt_text}",
                     (x1, max(y1 - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+        debug = live_debug_text(row) if row["track_id"] == selected_track_id else None
+        if debug:
+            cv2.putText(annotated, debug, (x1, min(y2 + 20, annotated.shape[0] - 40)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, SELECTED_COLOR, 1)
+
+    notes = [m.get("note") or "(no note)" for m in markers if m["frame"] == frame_idx]
+    if notes:
+        text = "MARKER: " + " / ".join(notes)
+        cv2.rectangle(annotated, (0, 0), (annotated.shape[1], 30), (0, 0, 160), -1)
+        cv2.putText(annotated, text, (10, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.6, LABEL_MARK_COLOR, 2)
 
     total = frame.shape[0]
     bar_y = total - 28
     cv2.rectangle(annotated, (0, bar_y), (annotated.shape[1], total), (30, 30, 30), -1)
     sel_text = f"selected: track {selected_track_id}" if selected_track_id is not None else "selected: none"
-    cv2.putText(annotated, f"frame {frame_idx} | {sel_text} | 'h' for help",
+    marker_text = f" | {len(markers)} markers (m/M)" if markers else ""
+    cv2.putText(annotated, f"frame {frame_idx} | {sel_text}{marker_text} | 'h' for help",
                 (10, total - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.55, LABEL_MARK_COLOR, 1)
 
     if show_help:
@@ -165,12 +223,17 @@ def main():
         "video's real resolution, so selection stays accurate at any scale",
     )
     parser.add_argument("--max-display-height", type=int, default=680)
+    parser.add_argument("--markers", default=None,
+                         help="problem markers of a recorded run (default: markers.jsonl next to the predictions)")
     args = parser.parse_args()
 
     predictions_path = Path(args.predictions)
-    labels_path = Path(args.labels) if args.labels else predictions_path.with_suffix(".labels.json")
+    labels_path = Path(args.labels) if args.labels else default_labels_path(predictions_path)
 
     predictions_by_frame = load_predictions(predictions_path)
+    markers = load_markers(Path(args.markers) if args.markers else predictions_path.parent / "markers.jsonl")
+    if markers:
+        print(f"{len(markers)} problem markers - m / M jumps between them", flush=True)
     labels = Labels.load_or_init(labels_path, predictions_by_frame, video=args.video)
 
     # Predictions were computed against the rotation-corrected video (every
@@ -240,7 +303,7 @@ def main():
                 current_cap_frame = frame_idx
 
             annotated = draw_frame(frame_img, predictions_by_frame, labels, frame_idx,
-                                    state["selected"], show_help)
+                                    state["selected"], show_help, markers)
             if display_scale < 1.0:
                 display_frame = cv2.resize(annotated, (int(frame_w * display_scale), int(frame_h * display_scale)))
             else:
@@ -287,6 +350,10 @@ def main():
                     state["frame"] = nxt
             elif key_low == ord("E"):
                 nxt = find_next_event_frame(predictions_by_frame, total_frames, frame_idx, -1)
+                if nxt is not None:
+                    state["frame"] = nxt
+            elif key_low in (ord("m"), ord("M")):
+                nxt = find_next_marker_frame(markers, frame_idx, +1 if key_low == ord("m") else -1)
                 if nxt is not None:
                     state["frame"] = nxt
             elif key_low in GAZE_KEYS and state["selected"] is not None:

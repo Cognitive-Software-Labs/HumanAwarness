@@ -20,13 +20,15 @@ Every stage before this one (A, B1, B2) produces per-frame cues with no
 memory of the person. Awareness is the first per-person state: for each
 `track_id`, a **value** ("knows the robot is there", 0..1) and a
 **confidence** (how much recent observation backs the value, 0..1), driven
-by `human_gaze`'s per-frame `sees_robot` decision and decaying over
-`tau_awareness_s` = 8 s.
+by `human_gaze`'s per-frame `sees_robot` decision. After the last sighting
+it holds for `forget_delay_s` = 4 s, then decays over `tau_awareness_s` =
+20 s (see "Forgetting timescale").
 
 Awareness is not "looking right now". Someone who looked at the robot three
 seconds ago and is now talking to someone else still knows it's there, so
-the value climbs within a second of a real look and fades over about 8 s
-afterwards. It does not drop as soon as the person looks away.
+the value climbs within a second of a real look, stays put for 4 s, and
+then fades with a ~14 s half-life. It does not drop as soon as the person
+looks away.
 
 Code: `src/human_awareness/human_awareness/awareness.py`
 (`AwarenessAggregator`, pure Python, no ROS imports, unit-tested in
@@ -44,6 +46,11 @@ is the exact solution for constant evidence over the interval:
 | in view, doesn't see it (weight w) | relaxes toward `(1 - w) × init_value` with `tau_awareness_s` | rises toward 1, time constant `confidence_time_s / w` |
 | no usable cue | relaxes toward `init_value` (0.5) with `tau_awareness_s` | decays toward 0 with `tau_awareness_s` |
 
+The two value decays don't start until `forget_delay_s` after the last
+moment a "sees the robot" cue held; until then the value doesn't fall at
+all. Confidence decay has no such delay: it tracks how recently the person
+was observed, not what they remember.
+
 With the defaults (head-only w = 0.5, iris w = 1): 1 s of head-only "sees
 the robot" takes a new person from 0.5 to 0.82; a single head-only frame at
 30 fps closes 3.3% of the remaining gap to 1 (+0.016 from 0.5). Watched not
@@ -55,8 +62,8 @@ Not seen at all, the value settles back at 0.5 with confidence 0.
 - **Fast rise, slow fade.** One clear look is enough to know the robot is
   there; looking away doesn't undo it. The rise has its own time constant
   (`rise_time_s` = 0.5 s at weight 1, so 1 s for head pose), which damps
-  one-frame flickers. Everything else decays with the design doc's
-  `tau_awareness_s`.
+  one-frame flickers. Everything else decays with `tau_awareness_s`, after
+  the `forget_delay_s` hold.
 - **"Not looking" is weak evidence, "not seen" is none.** A valid
   observation of someone not looking pulls the value down over
   `tau_awareness_s`. A head-only reading only pulls it halfway down (to
@@ -91,7 +98,7 @@ Not seen at all, the value settles back at 0.5 with confidence 0.
   enough to know it's there (the design doc's own reason for the robot
   cone). Direct contact will matter more for willingness.
 - **The iris-position veto needs nothing special.** Over ROS it arrives as
-  `sees_robot=False` (`eyes_averted` isn't on the message), and the script
+  `sees_robot=False` (with `eyes_averted` set alongside), and the script
   feeds the same vetoed `sees_robot`, so ROS and script agree.
 - **`cue_max_age_s` is a hold, not a filter on arrival.** A cue holds from
   its frame until a newer one replaces it or it is 0.5 s old (the design
@@ -129,6 +136,39 @@ Not seen at all, the value settles back at 0.5 with confidence 0.
   streams at different rates. For one dimension fed by one ~10-30 Hz
   stream, publishing per message keeps it aligned with the frames.
 
+## Forgetting timescale (2026-11-16)
+
+On the first live run on the Unitree R1, awareness dropped too fast after
+looking away: with the design doc's `tau_awareness_s` = 8 s and decay
+starting at once, a person who looked straight at the robot (iris-sourced)
+and then looked away fell to 0.61 after 4 s and 0.37 after 8 s. The values
+now come from memory research instead:
+
+- **Forgetting doesn't start right away.** Zhang & Luck (2009, *Psychological
+  Science* 20(4)) found visual working memory holds a seen item for several
+  seconds with no loss of precision, and the chance of still having it
+  only starts falling between about 4 and 10 s. Hence `forget_delay_s` = 4.
+- **Unrehearsed short-term memory is gone after ~18-30 s.** Peterson &
+  Peterson (1959): recall fell from ~80% at 3 s to under 10% at 18 s while
+  rehearsal was blocked. That is a lower bound for this use: Keppel &
+  Underwood (1962) showed almost no forgetting at 18 s on the first trial,
+  so much of the loss was interference from earlier items, and a robot in
+  the room is one salient object, not a list of trigrams. Memory for
+  objects in a scene also lasts far longer (Hollingworth & Henderson 2002;
+  Hollingworth 2006). `tau_awareness_s` = 20 s puts the halfway point at
+  4 + 14 = 18 s and leaves about a quarter at 30 s.
+
+Iris-sourced look, then (values at +2 / +4 / +8 / +15 / +30 s):
+
+| after looking away | before (tau 8, no delay) | now |
+|---|---|---|
+| watched, head-only "not looking" | 0.83 / 0.70 / 0.53 / 0.37 / 0.27 | 1.00 / 1.00 / 0.86 / 0.68 / 0.45 |
+| watched, iris "not looking" | 0.78 / 0.61 / 0.37 / 0.15 / 0.02 | 1.00 / 1.00 / 0.82 / 0.58 / 0.27 |
+| out of view | 0.91 / 0.82 / 0.69 / 0.58 / 0.51 | 1.00 / 1.00 / 0.92 / 0.80 / 0.64 |
+
+Not fitted to awareness ground truth (there is none yet). The "Empirical
+validation" numbers below were measured with the old 8 s / no-delay values.
+
 ## Interfaces
 
 `awareness_node` (`ros2 launch human_awareness human_awareness.launch.py`):
@@ -154,7 +194,8 @@ see below).
 
 | param | default | meaning |
 |---|---|---|
-| `tau_awareness_s` | 8.0 | design doc: how long a sighting keeps someone aware; also how fast confidence fades without observation |
+| `tau_awareness_s` | 20.0 | design doc's name (its value was 8.0): time constant of the fade once forgetting starts; also how fast confidence fades without observation |
+| `forget_delay_s` | 4.0 | new: after the last sighting, no forgetting at all for this long |
 | `cue_max_age_s` | 0.5 | design doc: a cue holds for at most this long after its frame |
 | `init_value` | 0.5 | design doc: where a new `track_id` starts (confidence always starts at 0); also the "don't know" level unseen people relax to |
 | `rise_time_s` | 0.5 | new: time constant of the rise while seeing the robot, at weight 1 (head pose: 1 s) |

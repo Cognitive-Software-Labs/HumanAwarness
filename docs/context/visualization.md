@@ -35,6 +35,7 @@ Per person, the same layout as
 | bbox + `id N (predicted)`, orange | LOST_KALMAN: the Kalman prediction, no detection this frame |
 | bbox + `untracked`, cyan | `track_id` -1 (when fed straight from `human_perception`) |
 | `LOOKING AT ROBOT` / `NOT LOOKING` | `head_pose_valid`; phase-2 `sees_robot` when it ran, else the flat `aware_threshold_deg` fallback, the same rule as the script |
+| `NOT LOOKING (eyes away)` | the iris-position veto fired (`eyes_averted`, on the message since 2026-11-16) |
 | `no head pose`, grey | tracked but no head pose this frame |
 | `aware V conf C` + bar | awareness value/confidence (red 0 → green 1) |
 | top-left: `people: N`, `lag: X ms` | frame info; lag = node clock − frame stamp, shown only when plausible (0–60 s) |

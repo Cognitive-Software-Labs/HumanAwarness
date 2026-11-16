@@ -275,7 +275,7 @@ is all project-owned geometry:
   deployment-independent and already verified against hand-computed
   expected values (see "Empirical validation").
 
-### Iris-position veto on head-only decisions
+### Iris-position veto
 
 Head pose alone can't tell "head toward the camera, eyes looking elsewhere"
 apart from real looking. On the manually labeled WhatsApp clip
@@ -299,8 +299,8 @@ need fixation-level precision, so it's done separately:
   head-only, an iris more than `iris_veto_max_offset` eye widths from that
   sets `eyes_averted` and forces the geometric `sees_robot`/`direct_contact`
   to False (`dataclasses.replace`, so `gaze_node` publishes the vetoed
-  decision with no message change). Iris-sourced frames are left alone -
-  MobileGaze already accounted for the eyes there. `gaze_robot_deg` (the
+  decision with no message change). Since 2026-11-16 this applies to
+  iris-sourced frames too (see "Veto on iris-sourced frames" below). `gaze_robot_deg` (the
   angle) is never touched; a consumer that thresholds that angle itself
   doesn't get the veto.
 
@@ -343,6 +343,24 @@ scored against all three people's labels):
 With the veto off the export is identical, row for row, to the run before
 it existed.
 
+### Veto on iris-sourced frames (2026-11-16)
+
+The veto first skipped iris-sourced frames, assuming MobileGaze had already
+accounted for the eyes. The first live run on the Unitree R1 showed
+otherwise: close up, with eyes large enough for the iris path to engage,
+the person looked away with the eyes only, the iris landmarks were clearly
+off-centre, and it still said "looking". MobileGaze is trained on Gaze360,
+whose gaze mostly follows the head, and the `mobileone_s0` variant has
+~12.6° error, so an eyes-only glance can stay inside the iris branch's
+`sees_robot` allowance (robot cone + `peripheral_buffer_deg`, ~22° at 1 m).
+The veto now runs on every frame with face landmarks, whatever the source.
+
+Checked on the labeled WhatsApp clip (full chain, `--head-only-extra-deg
+35`): the score is unchanged (TP 510, FP 105, FN 82). Its 11 iris-sourced
+frames are all labeled "looking" and sit at iris offset 0.000-0.024, far
+under 0.12, so none were wrongly vetoed. That clip has no iris-sourced
+false positives, so it can't show the gain; the R1 footage would.
+
 ## Interfaces
 
 Reuses `human_awareness_msgs/PersonDetection` a fourth time, extending it
@@ -373,6 +391,11 @@ extensions):
   gaze vector and the true direction to the robot - the phase-2 analogue of
   `gaze_robot_deg`, but not bearing-subtracted (it's already a true angle,
   not a yaw-vs-bearing difference).
+- `gaze_gate_reason` (string), `iris_offset` (float32, -1 = no face
+  landmarks) and `eyes_averted` (bool), added 2026-11-16 for debugging live
+  runs (`docs/context/run_recorder.md`): why the iris path did or didn't
+  run, the veto's measurement, and whether it fired. Diagnostics only;
+  nothing downstream decides on them.
 - `sees_robot` (bool) / `direct_contact` (bool): phase 2's two decision
   outputs - peripheral ("robot is in view") and strict ("looking right at
   it") respectively. **Placeholder-calibrated** - see "Design decisions:
@@ -605,7 +628,7 @@ extensions):
 | `head_only_extra_deg` | 10.0 | extra `sees_robot` slack when the fused source this frame is head-only, not iris - lowered from the design doc's 15.0, see "Empirical validation" |
 | `shoulder_width_prior_m` | 0.40 | distance-estimator fallback tier 2: assumed real shoulder width |
 | `person_height_prior_m` | 1.70 | distance-estimator fallback tier 3 (last resort): assumed real person height |
-| `iris_veto_max_offset` | 0.12 | on a head-only frame, an iris more than this many eye widths from where it'd sit looking at the camera vetoes `sees_robot`/`direct_contact`; >= 1.0 disables - see "Iris-position veto" |
+| `iris_veto_max_offset` | 0.12 | on any frame with face landmarks, an iris more than this many eye widths from where it'd sit looking at the camera vetoes `sees_robot`/`direct_contact`; >= 1.0 disables - see "Iris-position veto" |
 | `iris_shift_per_yaw_deg` | 0.0027 | how far (in eye widths) the iris sits off-centre per degree of head yaw while still looking at the camera |
 
 Physical rig calibration - same `GazePipeline`/`gaze_node` constructor, but
@@ -649,9 +672,7 @@ and `camera_pitch_deg` is static, so tests should keep the head level.
   people, one phone camera, indoor light). Leave-one-person-out supports it
   generalizing across people, but not across cameras, resolutions or
   lighting - re-score it on a second labeled clip before trusting the
-  numbers above. Per-frame only (no smoothing over time), and
-  `eyes_averted` isn't a field on the ROS message - it only shows up there
-  as `sees_robot`/`direct_contact` being False.
+  numbers above. Per-frame only (no smoothing over time).
 - **`blur_min` is an unset placeholder** (0.0 - the gate never actually
   rejects anything on blur right now), consistent with the design doc's
   own "calibrat" (calibrated) note rather than a fixed recommended value -

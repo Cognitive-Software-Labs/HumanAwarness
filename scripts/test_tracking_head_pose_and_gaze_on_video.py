@@ -92,14 +92,18 @@ def main():
     parser.add_argument("--camera-offset-forward-m", type=float, default=0.0)
     parser.add_argument(
         "--iris-veto-max-offset", type=float, default=0.12,
-        help="veto a head-only 'looking' when the iris sits more than this many eye widths from where it "
+        help="veto a 'looking' when the iris sits more than this many eye widths from where it "
         "would looking at the camera (>= 1.0 disables) - see docs/context/gaze.md",
     )
     parser.add_argument("--iris-shift-per-yaw-deg", type=float, default=0.0027)
     parser.add_argument(
-        "--tau-awareness-s", type=float, default=8.0,
-        help="awareness fades with this time constant once the person stops seeing the robot - "
+        "--tau-awareness-s", type=float, default=20.0,
+        help="awareness fades with this time constant once forgetting starts - "
         "see docs/context/awareness.md",
+    )
+    parser.add_argument(
+        "--forget-delay-s", type=float, default=4.0,
+        help="awareness doesn't fall at all for this long after the person last saw the robot",
     )
     parser.add_argument("--cue-max-age-s", type=float, default=0.5)
     parser.add_argument("--awareness-rise-time-s", type=float, default=0.5)
@@ -147,6 +151,7 @@ def main():
     tracker = Tracker(reid_threshold=args.reid_threshold)
     awareness = AwarenessAggregator(
         tau_s=args.tau_awareness_s,
+        forget_delay_s=args.forget_delay_s,
         cue_max_age_s=args.cue_max_age_s,
         rise_time_s=args.awareness_rise_time_s,
         confidence_time_s=args.awareness_confidence_time_s,
@@ -327,7 +332,7 @@ def main():
         f"else the flat phase-1 |gaze| <= {args.aware_threshold_deg}deg fallback): {looking_frames}"
     )
     print(f"sees_robot: {sees_robot_frames}, direct_contact: {direct_contact_frames}")
-    print(f"Head-only frames with eyes judged averted (iris-position veto): {eyes_averted_frames}")
+    print(f"Frames with eyes judged averted (iris-position veto): {eyes_averted_frames}")
     print(f"Track-frames that fed awareness a cue: {awareness_cue_frames}")
     print(f"-> {out_path}")
 

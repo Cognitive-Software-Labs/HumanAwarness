@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>human_run_recorder</name>
+  <version>0.0.1</version>
+  <description>
+    Records a live pipeline run to a folder for later debugging: the frames
+    the pipeline processed, an annotated copy with per-person debug numbers,
+    per-person predictions in the review tool's format, ROS log lines,
+    node parameters, and problem markers dropped live.
+  </description>
+  <maintainer email="lauramuresan420@gmail.com">Laura</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>cv_bridge</depend>
+  <depend>human_awareness_msgs</depend>
+  <depend>human_visualization</depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

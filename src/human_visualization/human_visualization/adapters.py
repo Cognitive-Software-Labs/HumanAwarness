@@ -42,6 +42,7 @@ def person_detection_to_overlay(
         predicted=det.state == LOST_KALMAN,
         head_pose_valid=bool(det.head_pose_valid) if show_gaze and tracked else None,
         is_looking=is_looking(det, aware_threshold_deg),
+        eyes_averted=bool(getattr(det, "eyes_averted", False)),
         awareness=(det.awareness_value, det.awareness_confidence) if show_awareness and tracked else None,
     )
 

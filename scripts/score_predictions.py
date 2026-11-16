@@ -21,7 +21,7 @@ from collections import defaultdict
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from _label_io import GAZE_LOOKING, GAZE_NOT_LOOKING, Labels, load_predictions
+from _label_io import GAZE_LOOKING, GAZE_NOT_LOOKING, Labels, default_labels_path, load_predictions
 
 
 def frame_ranges(frames: list) -> list:
@@ -144,7 +144,7 @@ def main():
 
     for i, pred_path_str in enumerate(args.predictions):
         pred_path = Path(pred_path_str)
-        labels_path = Path(args.labels[i]) if args.labels else pred_path.with_suffix(".labels.json")
+        labels_path = Path(args.labels[i]) if args.labels else default_labels_path(pred_path)
         if not labels_path.exists():
             print(f"\n=== {pred_path.name} ===\n  No labels file at {labels_path} yet - skipping.")
             continue

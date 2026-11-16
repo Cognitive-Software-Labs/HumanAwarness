@@ -239,8 +239,9 @@ class GazePipeline:
         # Looking at the camera with the head turned shifts the iris off-centre by this much.
         expected_pos = 0.5 + self.iris_shift_per_yaw_deg * head_yaw_deg
         result.iris_offset = abs(iris_horiz_pos - expected_pos)
-        # An iris-sourced decision already reflects the eyes; only head-only ones are blind to them.
-        if result.source != SOURCE_HEAD or result.iris_offset <= self.iris_veto_max_offset:
+        # Applies to iris-sourced frames too: MobileGaze (Gaze360-trained) mostly follows the
+        # head and misses eyes-only glances away, which the landmark iris position does catch.
+        if result.iris_offset <= self.iris_veto_max_offset:
             return result
         result.eyes_averted = True
         if result.geometric is not None:

@@ -38,6 +38,9 @@ bool iris_valid           # an iris reading was gated through and estimated this
 bool iris_fixating        # iris_valid *and* held steady long enough to trust (see fixation.py)
 string gaze_source        # "head" or "iris" - which signal produced gaze_robot_deg above
 float32 iris_yaw_deg      # fixation-confirmed, filtered iris gaze yaw, degrees - 0 if not iris_fixating
+string gaze_gate_reason   # why the iris path did or didn't run this frame ("ok", "eyes too small", ...) - diagnostic only
+float32 iris_offset -1.0  # eye widths between the iris and where it'd sit looking at the camera; -1 = no face landmarks
+bool eyes_averted         # iris_offset over iris_veto_max_offset: sees_robot/direct_contact were forced false
 
 # Phase-2 geometric decision (human_gaze/geometric_decision.py, docs/context/gaze.md):
 # replaces gaze_robot_deg's flat threshold with a real cone test around the

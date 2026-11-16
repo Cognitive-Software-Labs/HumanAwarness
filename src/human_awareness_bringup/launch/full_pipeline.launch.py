@@ -4,6 +4,7 @@
     ros2 launch human_awareness_bringup full_pipeline.launch.py viewer:=true
     ros2 launch human_awareness_bringup full_pipeline.launch.py webcam:=true viewer:=true
     ros2 launch human_awareness_bringup full_pipeline.launch.py image_topic:=/my_robot/camera/color/image_raw
+    ros2 launch human_awareness_bringup full_pipeline.launch.py record:=true   # save the run for debugging
 
 Each stage is started through its own package's launch file, so it keeps its
 own default config (override a stage's yaml with that stage's launch file
@@ -34,7 +35,7 @@ _STAGES = [
 ]
 
 
-def _include(package: str, launch_file: str, launch_arguments=None) -> GroupAction:
+def _include(package: str, launch_file: str, launch_arguments=None, condition=None) -> GroupAction:
     """Each stage's launch file declares its own `params_file` argument; in a
     shared scope the first one's value (bbox_keypoints.yaml) sticks and every
     later stage silently loads it instead of its own config. A scoped group
@@ -48,6 +49,7 @@ def _include(package: str, launch_file: str, launch_arguments=None) -> GroupActi
             )
         ],
         scoped=True,
+        condition=condition,
     )
 
 
@@ -76,6 +78,15 @@ def generate_launch_description():
             default_value=os.path.join(get_package_share_directory("human_gaze"), "config", "robot_rig.yaml"),
             description="Your robot's camera height/tilt/offset calibration, passed to the gaze stage.",
         ),
+        DeclareLaunchArgument(
+            "record",
+            default_value="false",
+            description="Record this run (video, per-person predictions, logs, params, markers) for debugging.",
+        ),
+        DeclareLaunchArgument(
+            "runs_dir", default_value="~/human_awareness_runs", description="Where record:=true saves runs."
+        ),
+        DeclareLaunchArgument("run_name", default_value="", description="Run folder name (default: start time)."),
     ]
 
     pipeline = GroupAction(
@@ -87,6 +98,14 @@ def generate_launch_description():
                 {"robot_rig_file": LaunchConfiguration("robot_rig_file")} if package == "human_gaze" else None,
             )
             for package, launch_file in _STAGES
+        ]
+        + [
+            _include(
+                "human_run_recorder",
+                "human_run_recorder.launch.py",
+                {"runs_dir": LaunchConfiguration("runs_dir"), "run_name": LaunchConfiguration("run_name")},
+                condition=IfCondition(LaunchConfiguration("record")),
+            )
         ]
     )
 

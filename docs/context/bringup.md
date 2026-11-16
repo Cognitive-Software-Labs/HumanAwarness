@@ -21,6 +21,9 @@ ros2 launch human_awareness_bringup full_pipeline.launch.py viewer:=true
 | `webcam` | `false` | start `image_tools cam2image` publishing on `image_topic` |
 | `webcam_device` | `0` | webcam index for `cam2image` |
 | `robot_rig_file` | `human_gaze`'s `robot_rig.yaml` | camera/robot calibration, forwarded to the gaze stage |
+| `record` | `false` | also start `run_recorder_node`, saving the run for debugging (`docs/context/run_recorder.md`) |
+| `runs_dir` | `~/human_awareness_runs` | where `record:=true` saves runs |
+| `run_name` | `""` | the run's folder name (default: start time) |
 
 ## Design decisions
 

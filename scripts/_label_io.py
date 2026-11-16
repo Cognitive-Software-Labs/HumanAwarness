@@ -23,6 +23,7 @@ every frame:
   so they're excluded from scoring rather than counted as a miss either way).
 """
 
+import gzip
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -32,13 +33,38 @@ GAZE_NOT_LOOKING = "not_looking"
 GAZE_UNSURE = "unsure"
 
 
+def resolve_predictions_path(jsonl_path) -> Path:
+    """A recorded run's predictions.jsonl becomes predictions.jsonl.gz once
+    it's compressed (human_run_recorder/compress.py): either name finds
+    whichever exists."""
+    path = Path(jsonl_path)
+    if path.exists():
+        return path
+    for other in (path.with_name(path.name + ".gz"), path.with_suffix("") if path.suffix == ".gz" else None):
+        if other is not None and other.exists():
+            return other
+    return path
+
+
+def default_labels_path(predictions_path) -> Path:
+    """<predictions>.labels.json, the same file whether the predictions are
+    gzipped or not, so labels made before compression are still found."""
+    path = Path(predictions_path)
+    if path.suffix == ".gz":
+        path = path.with_suffix("")
+    return path.with_suffix(".labels.json")
+
+
 def load_predictions(jsonl_path) -> dict:
     """Returns {frame_idx: [row, ...]} - every exported track-frame record,
     grouped by frame. Rows keep every field test_tracking_head_pose_and_
     gaze_on_video.py's --export-jsonl writes (bbox, track_id/state, head
-    pose, fused gaze, geometric decision, is_looking)."""
+    pose, fused gaze, geometric decision, is_looking). Reads .jsonl or
+    .jsonl.gz."""
     by_frame: dict = {}
-    with open(jsonl_path) as f:
+    path = resolve_predictions_path(jsonl_path)
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt") as f:
         for line in f:
             line = line.strip()
             if not line:

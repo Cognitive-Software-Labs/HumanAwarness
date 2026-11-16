@@ -33,7 +33,8 @@ See `CLAUDE.md` for a running index of what's been built, and
 - **awareness over time** — the first per-person state (stage D): for each
   track_id, a value + confidence for "knows the robot is there", rising
   within about a second while the gaze stage says the person sees the
-  robot, fading over ~8 s afterwards, and kept across LOST/ReID gaps
+  robot, held for 4 s afterwards and then fading with a ~14 s half-life
+  (from memory research), and kept across LOST/ReID gaps
   (`human_awareness` package, `awareness_node`). See
   `docs/context/awareness.md`.
 - **live visualization** — the live counterpart of `test_output/`'s
@@ -41,6 +42,10 @@ See `CLAUDE.md` for a running index of what's been built, and
   looking label and awareness bar drawn on, published as a ROS image topic
   to watch in `rqt_image_view` / RViz2 / Foxglove (`human_visualization`
   package, `visualization_node`). See `docs/context/visualization.md`.
+- **run recorder** — `record:=true` keeps each live run (video, per-person
+  numbers, logs, params, problem markers) in its own folder, ready for the
+  review tool (`human_run_recorder` package). See
+  `docs/context/run_recorder.md`.
 
 ## Setup
 
@@ -112,6 +117,8 @@ awareness drawn on. Other arguments:
   `/camera/image_raw`.
 - `webcam:=true` to use a laptop webcam (`webcam_device:=N` to pick one).
 - `robot_rig_file:=...` for your robot's calibration.
+- `record:=true` to save the run for debugging (see "Recording a live run"
+  below).
 
 The window needs a screen. On a robot without one, leave `viewer` off and
 run the viewer on a laptop on the same network with the same
@@ -240,8 +247,7 @@ a real robot-sized cone test at the person's estimated distance, replacing
 `gaze_robot_deg`'s flat angle threshold, and accounting for the camera not
 necessarily being mounted exactly at the robot's own center.
 
-When that decision comes from head pose alone, an iris-position check can
-veto it: if the iris sits clearly off to one side of the eye (for the
+An iris-position check can veto that decision (head-only or iris-sourced): if the iris sits clearly off to one side of the eye (for the
 person's head turn), `sees_robot`/`direct_contact` are set to false. This
 catches "head toward the camera, eyes looking elsewhere". On the labeled
 test clip it raised precision from 0.60 to 0.83, while recall dropped from
@@ -296,7 +302,8 @@ per input message with the same header, with `awareness_value` and
 LOST ones included.
 
 - `awareness_value` rises while the person sees the robot (`sees_robot`)
-  and fades over `tau_awareness_s` (8 s) after they stop. A new person
+  and, after they stop, holds for `forget_delay_s` (4 s) and then fades
+  over `tau_awareness_s` (20 s). A new person
   starts at 0.5 ("don't know"), and someone the camera can't see drifts
   back to 0.5, never to 0.
 - `awareness_confidence` says how much recent observation backs the
@@ -316,7 +323,7 @@ model, its parameters (`src/human_awareness/config/human_awareness.yaml`)
 and how it behaves on the labeled clip.
 
 ```bash
-ros2 run human_awareness awareness_node --ros-args -p tau_awareness_s:=5.0
+ros2 run human_awareness awareness_node --ros-args -p tau_awareness_s:=30.0 -p forget_delay_s:=6.0
 ```
 
 Unit tests for the core (no ROS needed):
@@ -386,6 +393,55 @@ Then start the five pipeline nodes above and the visualization. Notes:
 - Set `camera_hfov_deg` and `robot_rig.yaml` to your real camera and robot.
 - Packages are installed as copies, not symlinks, even with
   `--symlink-install` here: rebuild after editing a node.
+
+### Recording a live run (for debugging later)
+
+```bash
+ros2 launch human_awareness_bringup full_pipeline.launch.py record:=true viewer:=true
+```
+
+Saves the run to `~/human_awareness_runs/<date_time>/` (`runs_dir:=`,
+`run_name:=` to change): `camera.mkv` (the frames the pipeline processed),
+`annotated.mkv` (overlay + each person's head yaw, gaze source, angle to the
+robot, distance, iris offset and why iris did or didn't run),
+`predictions.jsonl`, `markers.jsonl`, `rosout.log`, `params.yaml` and
+`meta.json` (git commit, fps, frame count). Stop with Ctrl+C; the videos
+stay readable even if the run crashes.
+
+Old runs are compressed, never deleted: when a new run starts, every earlier
+one is shrunk in the background at low CPU priority (videos to H.264, about
+2.6x smaller; `predictions.jsonl` and `rosout.log` gzipped, about 7.5x). The
+tools below read compressed runs with the same commands. To compress the
+last run right away: `ros2 run human_run_recorder compress_runs`. Needs
+`ffmpeg` for the videos (`sudo apt install ffmpeg`).
+
+When you see a problem, mark it from a second terminal (Enter = mark now, or
+type a note first):
+
+```bash
+ros2 run human_run_recorder mark
+```
+
+Afterwards, jump straight to the marked moments (`m`/`M`) in the review
+tool, label them, and score:
+
+```bash
+python3 scripts/label_review_tool.py ~/human_awareness_runs/<run>/camera.mkv \
+    --predictions ~/human_awareness_runs/<run>/predictions.jsonl
+python3 scripts/score_predictions.py ~/human_awareness_runs/<run>/predictions.jsonl
+```
+
+To re-run a recording with different parameters, give `camera.mkv` to
+`scripts/test_tracking_head_pose_and_gaze_on_video.py`. That script doesn't
+read `robot_rig.yaml`, so for the R1 add `--camera-height-m 1.10
+--camera-offset-right-m -0.03 --camera-offset-down-m 0.25
+--camera-offset-forward-m -0.08`. Details: `docs/context/run_recorder.md`.
+
+Unit tests:
+
+```bash
+PYTHONPATH=src/human_run_recorder:src/human_visualization python3 -m pytest src/human_run_recorder/test -q
+```
 
 ## Testing on a static image (no ROS2 needed)
 

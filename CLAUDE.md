@@ -70,3 +70,10 @@ Template for new entries:
   an optional webcam and `rqt_image_view` window, with one `image_topic`
   remap for every stage (`human_awareness_bringup` package,
   `full_pipeline.launch.py`). See `docs/context/bringup.md`.
+- **run recorder (debug logs from live runs)** — `record:=true` saves each
+  live run to its own folder (processed frames, annotated video, per-person
+  predictions in the review tool's format, /rosout, node params, git
+  commit) plus problem markers dropped live with `ros2 run
+  human_run_recorder mark`; earlier runs are compressed (H.264, gzip),
+  never deleted, when a new one starts (`human_run_recorder` package,
+  `run_recorder_node`). See `docs/context/run_recorder.md`.

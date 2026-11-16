@@ -50,8 +50,8 @@ def test_looking_rises_with_head_time_constant():
 def test_iris_counts_more_than_head():
     head, iris = AwarenessAggregator(), AwarenessAggregator()
     assert feed(iris, 1, SEES_IRIS, 0.0, 0.5, 30).value > feed(head, 1, SEES_HEAD, 0.0, 0.5, 30).value
-    head_away = feed(head, 2, AWAY_HEAD, 0.0, 60.0, 30)
-    iris_away = feed(iris, 2, AWAY_IRIS, 0.0, 60.0, 30)
+    head_away = feed(head, 2, AWAY_HEAD, 0.0, 200.0, 30)
+    iris_away = feed(iris, 2, AWAY_IRIS, 0.0, 200.0, 30)
     # Watching someone not look: iris settles near 0, head pose only halfway to the prior.
     assert iris_away.value == pytest.approx(0.0, abs=0.01)
     assert head_away.value == pytest.approx(0.25, abs=0.01)
@@ -67,7 +67,7 @@ def test_one_frame_flicker_barely_moves_it():
 
 
 def test_fades_over_tau_after_looking():
-    agg = AwarenessAggregator(tau_s=8.0)
+    agg = AwarenessAggregator(tau_s=8.0, forget_delay_s=0.0)
     feed(agg, 1, SEES_HEAD, 0.0, 3.0, 30)
     start = agg.observe(1, 3.0 + 1 / 30, AWAY_HEAD)  # the held SEES cue ends here
     end = feed(agg, 1, AWAY_HEAD, 3.0 + 1 / 30, 11.0 + 1 / 30, 30)
@@ -76,7 +76,7 @@ def test_fades_over_tau_after_looking():
 
 
 def test_unseen_person_relaxes_to_unknown_not_to_zero():
-    agg = AwarenessAggregator(tau_s=8.0, cue_max_age_s=0.5)
+    agg = AwarenessAggregator(tau_s=8.0, forget_delay_s=0.0, cue_max_age_s=0.5)
     feed(agg, 1, SEES_HEAD, 0.0, 3.0, 30)
     held = agg.observe(1, 3.5, None)  # last cue still holds for 0.5 s
     later = agg.observe(1, 11.5, None)
@@ -86,7 +86,7 @@ def test_unseen_person_relaxes_to_unknown_not_to_zero():
 
 
 def test_cue_counts_for_at_most_cue_max_age():
-    agg = AwarenessAggregator(tau_s=8.0, cue_max_age_s=0.5, rise_time_s=0.5, weight_head=0.5)
+    agg = AwarenessAggregator(tau_s=8.0, forget_delay_s=0.0, cue_max_age_s=0.5, rise_time_s=0.5, weight_head=0.5)
     agg.observe(1, 0.0, SEES_HEAD)
     est = agg.observe(1, 2.0, None)
     after_hold = 1.0 - 0.5 * math.exp(-0.5 * 0.5 / 0.5)
@@ -95,7 +95,7 @@ def test_cue_counts_for_at_most_cue_max_age():
 
 def test_same_result_at_any_frame_rate():
     def run(fps):
-        agg = AwarenessAggregator()
+        agg = AwarenessAggregator(forget_delay_s=1.5)  # short, so the fade after it is exercised too
         feed(agg, 1, SEES_HEAD, 0.0, 2.0, fps)
         feed(agg, 1, AWAY_HEAD, 2.1, 5.0, fps)
         feed(agg, 1, None, 5.1, 9.0, fps)
@@ -108,8 +108,35 @@ def test_same_result_at_any_frame_rate():
         assert est.confidence == pytest.approx(reference.confidence, abs=1e-9)
 
 
+def test_no_forgetting_until_forget_delay_after_last_sighting():
+    agg = AwarenessAggregator(tau_s=20.0, forget_delay_s=4.0, cue_max_age_s=0.5)
+    feed(agg, 1, SEES_HEAD, 0.0, 3.0, 30)
+    seen = agg.observe(1, 3.5, AWAY_IRIS)  # SEES held until 3.5: last sighting
+    held = feed(agg, 1, AWAY_IRIS, 3.5, 7.5, 30)  # even a clear iris "not looking" doesn't erase it yet
+    assert held.value == pytest.approx(seen.value)
+    later = feed(agg, 1, AWAY_IRIS, 7.5, 27.5, 30)  # then fades toward 0 over tau
+    assert later.value == pytest.approx(seen.value * math.exp(-1.0))
+
+
+def test_forget_delay_also_holds_while_out_of_view():
+    agg = AwarenessAggregator(tau_s=20.0, forget_delay_s=4.0, cue_max_age_s=0.5)
+    feed(agg, 1, SEES_HEAD, 0.0, 3.0, 30)
+    seen = agg.observe(1, 3.5, None)
+    held = agg.observe(1, 7.5, None)
+    assert held.value == pytest.approx(seen.value)
+    assert held.confidence < seen.confidence  # confidence still fades: nobody is observing them
+    later = agg.observe(1, 27.5, None)
+    assert later.value - 0.5 == pytest.approx((seen.value - 0.5) * math.exp(-1.0))
+
+
+def test_no_hold_for_someone_never_seen_looking():
+    agg = AwarenessAggregator(tau_s=20.0, forget_delay_s=4.0)
+    est = feed(agg, 1, AWAY_IRIS, 0.0, 4.0, 30)
+    assert est.value == pytest.approx(0.5 * math.exp(-4.0 / 20.0), rel=1e-3)
+
+
 def test_state_survives_lost_and_resumes():
-    agg = AwarenessAggregator()
+    agg = AwarenessAggregator(tau_s=8.0, forget_delay_s=0.0)
     peak = feed(agg, 7, SEES_HEAD, 0.0, 2.0, 30)
     lost = feed(agg, 7, None, 2.0 + 1 / 30, 5.0, 30)  # LOST_KALMAN/LOST_GALLERY: published, no cue
     agg.prune({7})
@@ -145,7 +172,7 @@ def test_unknown_source_rejected():
 
 @pytest.mark.parametrize(
     "kwargs",
-    [{"tau_s": 0.0}, {"cue_max_age_s": 0.0}, {"rise_time_s": -1.0}, {"weight_head": 0.0}, {"weight_iris": 1.5},
+    [{"tau_s": 0.0}, {"forget_delay_s": -1.0}, {"cue_max_age_s": 0.0}, {"rise_time_s": -1.0}, {"weight_head": 0.0}, {"weight_iris": 1.5},
      {"init_value": 1.2}],
 )
 def test_rejects_bad_parameters(kwargs):
