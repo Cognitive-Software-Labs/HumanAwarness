@@ -82,7 +82,11 @@ def main():
     parser.add_argument("--robot-radius-m", type=float, default=0.3)
     parser.add_argument("--theta-contact-deg", type=float, default=12.0)
     parser.add_argument("--peripheral-buffer-deg", type=float, default=5.0)
-    parser.add_argument("--head-only-extra-deg", type=float, default=10.0)
+    parser.add_argument(
+        "--head-only-extra-deg", type=float, default=35.0,
+        help="widens sees_robot (not direct_contact) on head-only frames - see "
+        "docs/context/gaze.md's 'head_only_extra_deg raised from 10.0 to 35.0'",
+    )
     parser.add_argument(
         "--camera-offset-right-m", type=float, default=0.0,
         help="robot center's position relative to the camera, along the camera's own axes - "

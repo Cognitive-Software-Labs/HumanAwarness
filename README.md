@@ -283,7 +283,8 @@ ros2 run human_gaze gaze_node --ros-args \
 `min_eye_px` (design doc's recommended default was 20px; this project's
 own default is now 12px, lowered against real handheld footage — see
 `docs/context/gaze.md`'s "Empirical validation") and `head_only_extra_deg`
-(design doc's default 15°, this project's now 10°, same reasoning) were
+(design doc's default 15°, this project's now 35° after scoring against
+labeled footage) were
 both measured stricter/looser in practice than they looked on paper —
 check that section before trusting either default on your own camera.
 (Default params live in `src/human_gaze/config/human_gaze.yaml`.)

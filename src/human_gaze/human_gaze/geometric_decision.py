@@ -45,7 +45,7 @@ def evaluate(
     robot_radius_m: float = 0.3,
     theta_contact_deg: float = 12.0,
     peripheral_buffer_deg: float = 5.0,
-    head_only_extra_deg: float = 15.0,
+    head_only_extra_deg: float = 35.0,
 ) -> GeometricGazeResult:
     """Compares the person's and the robot's actual 3D positions (both in
     camera-optical-frame coordinates) rather than a pre-baked direction -

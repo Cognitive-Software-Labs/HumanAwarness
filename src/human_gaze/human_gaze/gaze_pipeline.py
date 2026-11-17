@@ -86,7 +86,7 @@ class GazePipeline:
         robot_radius_m: float = 0.3,
         theta_contact_deg: float = 12.0,
         peripheral_buffer_deg: float = 5.0,
-        head_only_extra_deg: float = 10.0,
+        head_only_extra_deg: float = 35.0,
         shoulder_width_prior_m: float = 0.40,
         person_height_prior_m: float = 1.70,
         camera_offset_right_m: float = 0.0,

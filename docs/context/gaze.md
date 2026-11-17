@@ -607,6 +607,45 @@ extensions):
   166->165, 292->275) - nothing like the large, specifically-false-positive
   drop on the problem clip (361->255) - the signature of a genuine
   calibration fix, not an over-correction.
+- **`head_only_extra_deg` raised from 10.0 to 35.0 (2026-11-17), against
+  labeled footage rather than single frames.** The 10.0 above was picked by
+  eye on one clip to drop one false positive; scored against labels, the
+  full chain at 10.0 loses most real looks. Labeled `whatsapp_1017` clip,
+  full chain, iris veto on: 10.0 -> precision 0.835 / recall 0.299, 35.0 ->
+  0.829 / 0.861 (matches the veto table above, which was already measured
+  at 35). A new clip (`whatsapp_1117_06`, three people standing side-on and
+  glancing at the camera, roughly labeled from contact sheets) gave 0
+  `sees_robot` at 10.0 and precision 0.95 / recall 0.96 at 35.0. Iris never
+  engaged on either clip (eyes 8-11px wide at 576px portrait), so every
+  decision there was head-only.
+  - **Why ~48 degrees total is the right ceiling, not just a fitted
+    number.** Eyes rotate at most ~45 degrees from where the head points;
+    beyond that a person cannot be looking straight at the robot. On both
+    clips the share of labeled "looking" frames by horizontal head-vs-robot
+    angle drops off a cliff exactly there (0-45: 40-93% looking; 45-60:
+    4-15%; >60: 0-4%), and a cutoff sweep on the 3D angle peaks at 48-50
+    (combined F1 0.89-0.90).
+  - **Tried and rejected: confidence zones** (head within ~20 degrees =
+    normal glance, 20-45 = side-eye with lower awareness weight, 45-100 =
+    peripheral). The 20-45 band wasn't clearly less reliable than under 20,
+    and weighting it lower made awareness worse on the side-on clip (29%
+    of frames falsely aware vs 2%). A separate horizontal/vertical limit
+    only tied the single 3D cone (F1 0.88 vs 0.89).
+  - **Measured angles here are inflated by the camera model, not just head
+    pose noise.** Truly-looking frames read ~10-40 degrees "above" the
+    robot (phone video processed with the robot rig's 70-degree HFOV and
+    1.2m camera height; people look down with their eyes, not their head),
+    which is why almost nothing measures under 20 degrees even when looking.
+    On the R1 with its real calibration angles should read smaller, so 35
+    may prove generous there - re-check against a labeled run recorder
+    session.
+  - Also tried for a hard side-eye (head turned past the cone, eyes on the
+    robot): lowering `min_eye_px` to 6 and lifting `max_yaw_gaze_deg`/
+    `max_eye_head_deg` gives MobileGaze readings but they never hold a
+    fixation, and at these eye sizes they don't separate looking from not
+    (AUC 0.49); a "head up to 55-70 if the landmark iris is centred" rule
+    added only false positives (someone looking away read as centred).
+    Side-eye beyond ~45 degrees needs more pixels on the eyes.
 
 ## Parameters (`GazePipeline.__init__` / `gaze_node`)
 
@@ -625,7 +664,7 @@ extensions):
 | `one_euro_beta` | 0.3 | One Euro filter: how much real movement speed cuts through the smoothing |
 | `theta_contact_deg` | 12.0 | `direct_contact`'s strict, distance-independent angle allowance |
 | `peripheral_buffer_deg` | 5.0 | degrees of slack added to the robot's own cone for `sees_robot` |
-| `head_only_extra_deg` | 10.0 | extra `sees_robot` slack when the fused source this frame is head-only, not iris - lowered from the design doc's 15.0, see "Empirical validation" |
+| `head_only_extra_deg` | 35.0 | extra `sees_robot` slack when the fused source this frame is head-only, not iris - design doc's 15.0, lowered to 10.0 by eye, then raised to 35.0 against labeled footage (~48 degrees total, the eye-rotation limit), see "Empirical validation" |
 | `shoulder_width_prior_m` | 0.40 | distance-estimator fallback tier 2: assumed real shoulder width |
 | `person_height_prior_m` | 1.70 | distance-estimator fallback tier 3 (last resort): assumed real person height |
 | `iris_veto_max_offset` | 0.12 | on any frame with face landmarks, an iris more than this many eye widths from where it'd sit looking at the camera vetoes `sees_robot`/`direct_contact`; >= 1.0 disables - see "Iris-position veto" |

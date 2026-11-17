@@ -125,8 +125,8 @@ def main():
         "--head-only-extra-deg", type=float, default=35.0,
         help="widens sees_robot only (not direct_contact) - this script is always head-only (no "
         "iris), so this always applies when a geometric decision fires at all. Raised from 10.0 "
-        "(the full gaze/iris pipeline's default) to 35.0 - real-footage labeling found 10.0 too "
-        "tight for head-only noise (recall 0.287), 35.0 best F1 (~0.85); see "
+        "to 35.0 - real-footage labeling found 10.0 too tight for head-only noise (recall "
+        "0.287), 35.0 best F1 (~0.85); same default as the full gaze/iris pipeline. See "
         "docs/context/labeling_tool.md's 'Validating against real footage'",
     )
     parser.add_argument("--shoulder-width-prior-m", type=float, default=0.40)

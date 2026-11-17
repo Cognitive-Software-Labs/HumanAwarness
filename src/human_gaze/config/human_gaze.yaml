@@ -30,7 +30,7 @@ gaze_node:
     # alongside this one by human_gaze.launch.py.
     theta_contact_deg: 12.0
     peripheral_buffer_deg: 5.0
-    head_only_extra_deg: 10.0  # design doc's default (15.0) was measured too lenient on real close-range footage - see docs/context/gaze.md
+    head_only_extra_deg: 35.0  # 10.0 cost most real looks on labeled footage (full chain recall 0.30 vs 0.86 at 35.0, same precision); ~48 deg total sits on the eye-rotation limit - see docs/context/gaze.md
     shoulder_width_prior_m: 0.40
     person_height_prior_m: 1.70
     # Iris-position veto on head-only decisions - fitted on one labeled clip, see docs/context/gaze.md.

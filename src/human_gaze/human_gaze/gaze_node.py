@@ -67,7 +67,7 @@ class GazeNode(Node):
         self.declare_parameter("robot_radius_m", 0.3)
         self.declare_parameter("theta_contact_deg", 12.0)
         self.declare_parameter("peripheral_buffer_deg", 5.0)
-        self.declare_parameter("head_only_extra_deg", 10.0)
+        self.declare_parameter("head_only_extra_deg", 35.0)
         self.declare_parameter("shoulder_width_prior_m", 0.40)
         self.declare_parameter("person_height_prior_m", 1.70)
         self.declare_parameter("camera_offset_right_m", 0.0)

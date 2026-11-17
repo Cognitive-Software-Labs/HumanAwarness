@@ -127,13 +127,11 @@ confirming `head_only_extra_deg` really is the right knob for this gap
 (as `docs/context/gaze.md`'s own design-decisions section already expected
 it to be), just defaulted too conservatively for real handheld footage.
 **Promoted to `test_tracking_and_head_pose_on_video.py`'s own
-`--head-only-extra-deg` default** (was 10.0, matching the full gaze/iris
-pipeline's separately-tuned value) - the two scripts cover different
-scenarios (head-only vs. iris-available) and don't need the same default.
-The full gaze/iris pipeline's `head_only_extra_deg=10.0`
-(`human_gaze/gaze_node.py`, `config/human_gaze.yaml`) is untouched - it was
-tuned against different evidence (see `docs/context/gaze.md`'s "Empirical
-validation") and this finding doesn't bear on it.
+`--head-only-extra-deg` default** (was 10.0). The full gaze/iris
+pipeline (`human_gaze/gaze_node.py`, `config/human_gaze.yaml`, the full-chain
+script) followed on 2026-11-17 once the full chain was scored too: 10.0 ->
+recall 0.299, 35.0 -> 0.861 at the same precision on this clip - see
+`docs/context/gaze.md`'s "Empirical validation".
 
 None of this is a finished calibration - one person, one clip, one
 `camera_hfov_deg`/`camera_height_m` guess. It's the first real evidence
